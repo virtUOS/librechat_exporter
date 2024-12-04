@@ -7,6 +7,9 @@ import signal
 import sys
 import time
 from datetime import datetime, timezone, timedelta
+from dotenv import load_dotenv
+
+load_dotenv()
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
