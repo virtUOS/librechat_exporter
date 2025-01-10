@@ -46,7 +46,6 @@ If you want to change the default database connection string `mongodb://mongodb:
 
 ```
 MONGODB_URI=mongodb://mongodb:27017/
-PROMETHEUS_PORT=8000
 ```
 
 ### 4. Run the Script
@@ -62,7 +61,8 @@ Add the following job to your Prometheus configuration file (prometheus.yml):scr
 - job_name: 'librechat_metrics'
   scrape_interval: 60s
   static_configs:
-    - targets: ['localhost:8000']  # Update if the script runs on a different host or port
+    - targets:
+        - 'localhost:8000'
 ```
 Reload Prometheus to apply the new configuration.
 
@@ -75,17 +75,16 @@ If you want to run the script inside the mongodb librechat container, you can ad
 
 ```yaml
 metrics:
-  build:
-    context: ./metrics
+  image: quay.io/virtUOS/LibrechatMetrics:main
   networks:
     - librechat
   depends_on:
     - mongodb
   ports:
     - "8000:8000"  # Expose port for Prometheus
+  environment:
+    - MONGODB_URI=mongodb://mongodb:27017/
   restart: unless-stopped
-  volumes:
-    - ./metrics/.env:/app/.env  # Mount the .env file
 ```
 
 Make sure the networks attribute is the same as your mongodb container.
