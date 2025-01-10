@@ -89,6 +89,42 @@ metrics:
 
 Make sure the networks attribute is the same as your mongodb container.
 
-## Authors
+## Metrics
 
-virtUOS
+The exporter provides the following metrics specific to LibreChat:
+
+```
+# HELP librechat_total_messages Total number of messages sent
+# TYPE librechat_total_messages gauge
+librechat_total_messages 0.0
+# HELP librechat_total_errors Total number of error messages
+# TYPE librechat_total_errors gauge
+librechat_total_errors 0.0
+# HELP librechat_total_input_tokens Total number of input tokens processed
+# TYPE librechat_total_input_tokens gauge
+librechat_total_input_tokens 0.0
+# HELP librechat_total_output_tokens Total number of output tokens generated
+# TYPE librechat_total_output_tokens gauge
+librechat_total_output_tokens 0.0
+# HELP librechat_total_conversations Total number of conversations started
+# TYPE librechat_total_conversations gauge
+librechat_total_conversations 0.0
+# HELP librechat_messages_per_model_total Total number of messages per model
+# TYPE librechat_messages_per_model_total gauge
+librechat_messages_per_model_total{model="gpt-4o"} 1.0
+# HELP librechat_errors_per_model_total Total number of errors per model
+# TYPE librechat_errors_per_model_total gauge
+# HELP librechat_input_tokens_per_model_total Total input tokens per model
+# TYPE librechat_input_tokens_per_model_total gauge
+# HELP librechat_output_tokens_per_model_total Total output tokens per model
+# TYPE librechat_output_tokens_per_model_total gauge
+# HELP librechat_active_users Current number of active users
+# TYPE librechat_active_users gauge
+librechat_active_users 0.0
+# HELP librechat_active_conversations Current number of active conversations
+# TYPE librechat_active_conversations gauge
+librechat_active_conversations 0.0
+# HELP librechat_unique_users_yesterday Number of unique users active yesterday
+# TYPE librechat_unique_users_yesterday gauge
+librechat_unique_users_yesterday 0.0
+```
