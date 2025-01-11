@@ -124,7 +124,10 @@ librechat_active_users 0.0
 # HELP librechat_active_conversations Current number of active conversations
 # TYPE librechat_active_conversations gauge
 librechat_active_conversations 0.0
-# HELP librechat_unique_users_yesterday Number of unique users active yesterday
-# TYPE librechat_unique_users_yesterday gauge
-librechat_unique_users_yesterday 0.0
+# HELP librechat_files_total Number of uploaded files
+# TYPE librechat_files_total counter
+librechat_files_total 0.0
+# HELP librechat_users_total Number of distinct users
+# TYPE librechat_users_total counter
+librechat_users_total 0.0
 ```
