@@ -1,0 +1,37 @@
+name: bandit and flake8
+
+on:
+  push:
+    branches-ignore:
+      - 'dependabot/**'
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        # https://endoflife.date/python
+        # https://github.com/actions/runner-images
+        python-version:
+          - '3.9'
+          - '3.10'
+          - '3.11'
+          - '3.12'
+          - '3.13'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: set up python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - run: pip install -r requirements.txt
+
+      - run: pip install flake8 bandit
+
+      - run: flake8 --max-line-length 120 *.py
+
+      - run: bandit *.py
