@@ -361,7 +361,7 @@ def signal_handler(sig, frame):
 if __name__ == "__main__":
     # Get MongoDB URI and Prometheus port from environment variables
     mongodb_uri = os.getenv("MONGODB_URI", "mongodb://mongodb:27017/")
-    prometheus_port = 8000#int(os.getenv("PROMETHEUS_PORT", "8000"))
+    prometheus_port = 8000
 
     # Handle shutdown signals
     signal.signal(signal.SIGINT, signal_handler)
