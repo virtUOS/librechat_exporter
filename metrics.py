@@ -1,6 +1,6 @@
 from pymongo import MongoClient
 from prometheus_client import start_http_server
-from prometheus_client.core import GaugeMetricFamily, REGISTRY
+from prometheus_client.core import CounterMetricFamily, GaugeMetricFamily, REGISTRY
 import logging
 import os
 import signal
@@ -47,6 +47,7 @@ class LibreChatMetricsCollector:
         yield from self.collect_active_users()
         yield from self.collect_active_conversations()
         yield from self.collect_total_files()
+        yield from self.collect_total_users()
 
     def collect_total_messages(self):
         """
@@ -308,53 +309,26 @@ class LibreChatMetricsCollector:
         except Exception as e:
             logger.error(f"Error collecting active conversations: {e}", exc_info=True)
 
-    def collect_daily_unique_users(self):
+    def collect_total_users(self):
         """
-        Collect number of unique users active yesterday.
-        This metric is collected once per day, but yielded on every scrape.
+        Collect number of distinct users.
         """
         try:
-            current_date = datetime.now(timezone.utc).date()
-            if self.last_run_date != current_date:
-                # Calculate the date range for yesterday
-                yesterday = current_date - timedelta(days=1)
-                start_time = datetime.combine(
-                    yesterday, datetime.min.time(), tzinfo=timezone.utc
-                )
-                end_time = datetime.combine(
-                    current_date, datetime.min.time(), tzinfo=timezone.utc
-                )
-                # Query for unique users active yesterday
-                unique_users = self.messages_collection.distinct(
-                    "user", {"createdAt": {"$gte": start_time, "$lt": end_time}}
-                )
-                unique_user_count = len(unique_users)
-                self.last_unique_users_yesterday = unique_user_count
-                # Update last_run_date
-                self.last_run_date = current_date
-                logger.debug(f"Updated unique users yesterday: {unique_user_count}")
-            else:
-                # Use the last calculated value
-                unique_user_count = getattr(self, "last_unique_users_yesterday", 0)
-                logger.debug(
-                    f"Using cached unique users yesterday: {unique_user_count}"
-                )
-            # Yield the metric with the current value
-            metric = GaugeMetricFamily(
-                "librechat_unique_users_yesterday",
-                "Number of unique users active yesterday",
-                value=unique_user_count,
+            user_count = self.db["users"].estimated_document_count()
+            yield CounterMetricFamily(
+                "librechat_users_total",
+                "Number of distinct users",
+                value=user_count,
             )
-            yield metric
         except Exception as e:
-            logger.error(f"Error collecting daily unique users: {e}", exc_info=True)
+            logger.exception(f"Error collecting distinct users: {e}")
 
     def collect_total_files(self):
         """
         Collect number of uploaded files.
         """
         try:
-            file_count = self.db['files'].estimated_document_count()
+            file_count = self.db["files"].estimated_document_count()
             yield CounterMetricFamily(
                 "librechat_files_total",
                 "Number of uploaded files",
