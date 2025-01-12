@@ -46,7 +46,7 @@ class LibreChatMetricsCollector:
         yield from self.collect_output_tokens_per_model()
         yield from self.collect_active_users()
         yield from self.collect_active_conversations()
-        yield from self.collect_daily_unique_users()
+        yield from self.collect_total_files()
 
     def collect_total_messages(self):
         """
@@ -348,6 +348,20 @@ class LibreChatMetricsCollector:
             yield metric
         except Exception as e:
             logger.error(f"Error collecting daily unique users: {e}", exc_info=True)
+
+    def collect_total_files(self):
+        """
+        Collect number of uploaded files.
+        """
+        try:
+            file_count = self.db['files'].estimated_document_count()
+            yield CounterMetricFamily(
+                "librechat_files_total",
+                "Number of uploaded files",
+                value=file_count,
+            )
+        except Exception as e:
+            logger.exception(f"Error collecting uploaded files: {e}")
 
 
 def signal_handler(sig, frame):
