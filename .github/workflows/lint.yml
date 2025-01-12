@@ -1,9 +1,9 @@
-name: bandit and flake8
+name: Linting
 
 on:
   push:
     branches-ignore:
-      - 'dependabot/**'
+      - "dependabot/**"
   pull_request:
 
 jobs:
@@ -14,11 +14,11 @@ jobs:
         # https://endoflife.date/python
         # https://github.com/actions/runner-images
         python-version:
-          - '3.9'
-          - '3.10'
-          - '3.11'
-          - '3.12'
-          - '3.13'
+          - "3.9"
+          - "3.10"
+          - "3.11"
+          - "3.12"
+          - "3.13"
 
     steps:
       - uses: actions/checkout@v4
