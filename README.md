@@ -75,7 +75,7 @@ If you want to run the script inside the mongodb librechat container, you can ad
 
 ```yaml
 metrics:
-  image: quay.io/virtUOS/LibrechatMetrics:main
+  image: ghcr.io/virtuos/librechatmetrics:main
   networks:
     - librechat
   depends_on:
