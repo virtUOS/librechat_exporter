@@ -131,3 +131,30 @@ librechat_files_total 0.0
 # TYPE librechat_users_total counter
 librechat_users_total 0.0
 ```
+
+## Development
+
+For development, start a MongoDB:
+```sh
+# Using Docker
+docker run -d -p 127.0.0.1:27017:27017 --name mongo mongo
+# Using Podman
+podman run -d -p 127.0.0.1:27017:27017 --name mongo mongo
+```
+
+Create a virtual environment and install the dependencies:
+```sh
+python -m venv venv
+. ./venv/bin/activate
+pip install -r requirements.txt
+```
+
+Run the metrics exporter:
+```sh
+python metrics.py
+```
+
+Query the metrics endpoint:
+```sh
+curl -sf http://localhost:8000
+```
