@@ -93,7 +93,7 @@ Make sure the networks attribute is the same as your mongodb container.
 
 The exporter provides the following metrics specific to LibreChat:
 
-```
+```sh
 # HELP librechat_total_messages Total number of messages sent
 # TYPE librechat_total_messages gauge
 librechat_total_messages 0.0
