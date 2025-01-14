@@ -3,10 +3,11 @@ FROM python:3.13-slim
 # Set the working directory
 WORKDIR /app
 
-COPY . /app
+COPY LICENSE metrics.py /app/
 
 # Install dependencies
-RUN pip install --no-cache-dir -r requirements.txt
+RUN --mount=type=bind,source=requirements.txt,target=/tmp/requirements.txt \
+    pip install --no-cache-dir --requirement /tmp/requirements.txt
 
 # Expose the Prometheus port
 EXPOSE 8000
