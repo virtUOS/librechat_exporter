@@ -1,6 +1,6 @@
-# LibreChat Metrics
+# LibreChat Metrics Exporter
 
-This script is designed to collect and expose various metrics from the [LibreChat](https://www.librechat.ai/) application for monitoring and analysis using Prometheus.
+This tool collects and exposes various metrics from [LibreChat](https://www.librechat.ai) for monitoring via Prometheus or other tools compatible with the OpenMetrics format.
 
 ## Overview
 
@@ -88,7 +88,7 @@ If you want to run the script inside the mongodb librechat container, you can ad
 
 ```yaml
 metrics:
-  image: ghcr.io/virtuos/librechatmetrics:main
+  image: ghcr.io/virtuos/librechat_exporter:main
   networks:
     - librechat
   depends_on:
