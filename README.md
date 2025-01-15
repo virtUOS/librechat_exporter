@@ -31,20 +31,22 @@ Clone the repository containing the script:
 
 ```bash
 git clone https://github.com/yourusername/librechat-metrics.git
-
 cd librechat-metrics
 ```
+
 ### 2. Install Dependencies
 
 Install the required Python packages using pip:
 
-```pip install -r requirements.txt```
+```sh
+pip install -r requirements.txt
+```
 
 ### 3. Configure the Environment Variables
 
 If you want to change the default database connection string `mongodb://mongodb:27017/` or the default port for Prometheus to scrape `8000`, you can create a `.env` file and set up the mongo database connection string from your environment:
 
-```
+```sh
 MONGODB_URI=mongodb://mongodb:27017/
 ```
 
@@ -52,11 +54,16 @@ MONGODB_URI=mongodb://mongodb:27017/
 
 Start the metrics collection script:
 
-```python metrics.py```
+```sh
+python metrics.py
+```
+
 The script will start an HTTP server to expose the metrics.
+
 ### 5. Configure Prometheus
 
 Add the following job to your Prometheus configuration file (prometheus.yml):scrape_configs:
+
 ```yaml
 - job_name: 'librechat_metrics'
   scrape_interval: 60s
@@ -64,8 +71,8 @@ Add the following job to your Prometheus configuration file (prometheus.yml):scr
     - targets:
         - 'localhost:8000'
 ```
-Reload Prometheus to apply the new configuration.
 
+Reload Prometheus to apply the new configuration.
 
 ## Docker Deployment
 
@@ -94,47 +101,48 @@ Make sure the networks attribute is the same as your mongodb container.
 The exporter provides the following metrics specific to LibreChat:
 
 ```sh
-# HELP librechat_total_messages Total number of messages sent
-# TYPE librechat_total_messages gauge
-librechat_total_messages 0.0
-# HELP librechat_total_errors Total number of error messages
-# TYPE librechat_total_errors gauge
-librechat_total_errors 0.0
-# HELP librechat_total_input_tokens Total number of input tokens processed
-# TYPE librechat_total_input_tokens gauge
-librechat_total_input_tokens 0.0
-# HELP librechat_total_output_tokens Total number of output tokens generated
-# TYPE librechat_total_output_tokens gauge
-librechat_total_output_tokens 0.0
-# HELP librechat_total_conversations Total number of conversations started
-# TYPE librechat_total_conversations gauge
-librechat_total_conversations 0.0
-# HELP librechat_messages_per_model_total Total number of messages per model
-# TYPE librechat_messages_per_model_total gauge
-librechat_messages_per_model_total{model="gpt-4o"} 1.0
-# HELP librechat_errors_per_model_total Total number of errors per model
-# TYPE librechat_errors_per_model_total gauge
-# HELP librechat_input_tokens_per_model_total Total input tokens per model
-# TYPE librechat_input_tokens_per_model_total gauge
-# HELP librechat_output_tokens_per_model_total Total output tokens per model
-# TYPE librechat_output_tokens_per_model_total gauge
-# HELP librechat_active_users Current number of active users
+# HELP librechat_messages Number of sent messages stored in the database
+# TYPE librechat_messages gauge
+librechat_messages 9.0
+# HELP librechat_error_messages Number of error messages stored in the database
+# TYPE librechat_error_messages gauge
+librechat_error_messages 0.0
+# HELP librechat_input_tokens Number of input tokens processed
+# TYPE librechat_input_tokens gauge
+librechat_input_tokens 0.0
+# HELP librechat_output_tokens Total number of output tokens generated
+# TYPE librechat_output_tokens gauge
+librechat_output_tokens 0.0
+# HELP librechat_conversations Number of started conversations stored in the database
+# TYPE librechat_conversations gauge
+librechat_conversations 0.0
+# HELP librechat_messages_per_model Number of messages per model
+# TYPE librechat_messages_per_model gauge
+librechat_messages_per_model{model="unknown"} 9.0
+# HELP librechat_errors_per_model Number of error messages per model
+# TYPE librechat_errors_per_model gauge
+# HELP librechat_input_tokens_per_model Number of input tokens per model
+# TYPE librechat_input_tokens_per_model gauge
+# HELP librechat_output_tokens_per_model Number of output tokens per model
+# TYPE librechat_output_tokens_per_model gauge
+# HELP librechat_active_users Number of active users
 # TYPE librechat_active_users gauge
-librechat_active_users 0.0
-# HELP librechat_active_conversations Current number of active conversations
+librechat_active_users 2.0
+# HELP librechat_active_conversations Number of active conversations
 # TYPE librechat_active_conversations gauge
 librechat_active_conversations 0.0
-# HELP librechat_files_total Number of uploaded files
-# TYPE librechat_files_total counter
-librechat_files_total 0.0
-# HELP librechat_users_total Number of distinct users
-# TYPE librechat_users_total counter
-librechat_users_total 0.0
+# HELP librechat_uploaded_files Number of uploaded files
+# TYPE librechat_uploaded_files gauge
+librechat_uploaded_files 1.0
+# HELP librechat_registered_users Number of registered users
+# TYPE librechat_registered_users gauge
+librechat_registered_users 1.0
 ```
 
 ## Development
 
 For development, start a MongoDB:
+
 ```sh
 # Using Docker
 docker run -d -p 127.0.0.1:27017:27017 --name mongo mongo
@@ -143,6 +151,7 @@ podman run -d -p 127.0.0.1:27017:27017 --name mongo mongo
 ```
 
 Create a virtual environment and install the dependencies:
+
 ```sh
 python -m venv venv
 . ./venv/bin/activate
@@ -150,11 +159,13 @@ pip install -r requirements.txt
 ```
 
 Run the metrics exporter:
+
 ```sh
 python metrics.py
 ```
 
 Query the metrics endpoint:
+
 ```sh
 curl -sf http://localhost:8000
 ```
