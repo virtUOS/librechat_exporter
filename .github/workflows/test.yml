@@ -50,6 +50,7 @@ jobs:
       - name: run exporter
         env:
           MONGODB_URI: "mongodb://127.0.0.1:27017/"
+          LOGGING_LEVEL: debug
         run: python metrics.py &> exporter.log &
 
       - name: get metrics

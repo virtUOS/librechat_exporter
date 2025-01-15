@@ -44,10 +44,16 @@ pip install -r requirements.txt
 
 ### 3. Configure the Environment Variables
 
-If you want to change the default database connection string `mongodb://mongodb:27017/` or the default port for Prometheus to scrape `8000`, you can create a `.env` file and set up the mongo database connection string from your environment:
+You can change the default configuration via environment variables.
+You can either set then directly, or add them to the `.env` file.
+Available configurations are:
 
 ```sh
+# Configure database connection
 MONGODB_URI=mongodb://mongodb:27017/
+
+# Configure log level
+LOGGING_LEVEL=info
 ```
 
 ### 4. Run the Script
@@ -91,6 +97,7 @@ metrics:
     - "8000:8000"  # Expose port for Prometheus
   environment:
     - MONGODB_URI=mongodb://mongodb:27017/
+    - LOGGING_LEVEL=info
   restart: unless-stopped
 ```
 

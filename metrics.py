@@ -13,7 +13,8 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # Set up logging
-logging.basicConfig(level=logging.INFO)
+loglevel = os.getenv("LOGGING_LEVEL", "info").upper()
+logging.basicConfig(level=loglevel)
 logger = logging.getLogger(__name__)
 
 
