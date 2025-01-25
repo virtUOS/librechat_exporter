@@ -15,8 +15,10 @@ load_dotenv()
 
 # Set up logging
 loglevel = os.getenv("LOGGING_LEVEL", "info").upper()
-logging.basicConfig(level=loglevel)
+logformat = os.getenv("LOGGING_FORMAT", "%(asctime)s - %(levelname)s - %(message)s")
+logging.basicConfig(format=logformat, level=loglevel)
 logger = logging.getLogger(__name__)
+logger.debug("Set log level to %s", logging.getLevelName(logger.getEffectiveLevel()))
 
 
 class LibreChatMetricsCollector(Collector):

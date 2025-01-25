@@ -58,6 +58,9 @@ MONGODB_URI=mongodb://mongodb:27017/
 # Configure log level
 LOGGING_LEVEL=info
 
+# Configure log format
+LOGGING_FORMAT="%(asctime)s - %(levelname)s - %(message)s"
+
 # Specify Mongo Database - Optional. Defaults to "LibreChat"
 MONGODB_DATABASE=librechat
 ```
