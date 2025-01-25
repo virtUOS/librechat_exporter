@@ -54,6 +54,9 @@ MONGODB_URI=mongodb://mongodb:27017/
 
 # Configure log level
 LOGGING_LEVEL=info
+
+# Configure log format
+LOGGING_FORMAT="%(asctime)s - %(levelname)s - %(message)s"
 ```
 
 ### 4. Run the Script
