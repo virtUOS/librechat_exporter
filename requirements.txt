@@ -1,3 +1,4 @@
 prometheus-client
 pymongo
 python-dotenv
+Twisted
