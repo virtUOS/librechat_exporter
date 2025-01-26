@@ -1,14 +1,15 @@
-from pymongo import MongoClient
-from prometheus_client import start_http_server
-from prometheus_client.core import GaugeMetricFamily, REGISTRY
-from prometheus_client.registry import Collector
 import logging
 import os
-import signal
-import sys
-import time
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timedelta, timezone
+
 from dotenv import load_dotenv
+from prometheus_client.core import REGISTRY, GaugeMetricFamily
+from prometheus_client.registry import Collector
+from prometheus_client.twisted import MetricsResource
+from pymongo import MongoClient
+from twisted.internet import reactor
+from twisted.web.resource import Resource
+from twisted.web.server import Site
 
 load_dotenv()
 
@@ -334,33 +335,21 @@ class LibreChatMetricsCollector(Collector):
             logger.exception("Error collecting uploaded files: %s", e)
 
 
-def signal_handler(sig, frame):
-    """
-    Handle termination signals to allow for graceful shutdown.
-    """
-    logger.info("Shutting down gracefully...")
-    sys.exit(0)
-
-
 if __name__ == "__main__":
     # Get MongoDB URI and Prometheus port from environment variables
     mongodb_uri = os.getenv("MONGODB_URI", "mongodb://mongodb:27017/")
-    prometheus_port = 8000
 
-    # Handle shutdown signals
-    signal.signal(signal.SIGINT, signal_handler)
-    signal.signal(signal.SIGTERM, signal_handler)
+    port = 8000
 
     # Start the Prometheus exporter
     collector = LibreChatMetricsCollector(mongodb_uri)
     REGISTRY.register(collector)
-    start_http_server(prometheus_port)
-    logger.info(f"Metrics server is running on port {prometheus_port}.")
+    logger.info("Starting server on port %i", port)
 
-    # Keep the application running
-    try:
-        while True:
-            time.sleep(1)
-    except KeyboardInterrupt:
-        logger.info("Received interrupt, shutting down.")
-        sys.exit(0)
+    root = Resource()
+    metrics = MetricsResource()
+    root.putChild(b"", metrics)
+    root.putChild(b"metrics", metrics)
+
+    reactor.listenTCP(port, Site(root))
+    reactor.run()
