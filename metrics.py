@@ -1,3 +1,4 @@
+import json
 import logging
 import os
 from datetime import datetime, timedelta, timezone
@@ -24,12 +25,11 @@ class LibreChatMetricsCollector(Collector):
     A custom Prometheus collector that gathers metrics from the LibreChat MongoDB database.
     """
 
-    def __init__(self, mongodb_uri):
+    def __init__(self, mongodb):
         """
         Initialize the MongoDB client and set up initial state.
         """
-        self.client = MongoClient(mongodb_uri)
-        self.db = self.client["LibreChat"]
+        self.db = mongodb
         self.messages_collection = self.db["messages"]
 
     def collect(self):
@@ -335,14 +335,70 @@ class LibreChatMetricsCollector(Collector):
             logger.exception("Error collecting uploaded files: %s", e)
 
 
+class InfinityResource(Resource):
+    isLeaf = True
+    statistics = {"daily": [], "weekly": []}
+    latest = {"daily": datetime.today(), "weekly": datetime.today()}
+
+    def __init__(self, mongodb):
+        """
+        Initialize the MongoDB client and set up initial state.
+        """
+        self.messages = mongodb["messages"]
+
+        # Get oldest message to use this as a start point for getting daily statistics
+        today = datetime.today().replace(hour=0, minute=0, second=0, microsecond=0)
+        start = today
+        for message in self.messages.find().sort("createdAt", 1).limit(1):
+            start = message["createdAt"].replace(
+                hour=0, minute=0, second=0, microsecond=0
+            )
+        logger.info("Generating daily statistics at %s", start)
+        self.update_statistics("daily", start, timedelta(days=1))
+
+        start = start - timedelta(days=start.weekday())
+        logger.info("Generating weekly statistics at %s", start)
+        self.update_statistics("weekly", start, timedelta(weeks=1))
+
+    def update_statistics(self, stat_type, start, interval):
+        today = datetime.today()
+        stats = self.statistics[stat_type]
+        end = start + interval
+        while end < today:
+            logger.info("Getting %s users from %s", stat_type, start)
+            count = self.user_count(start, end)
+            stats.append({"date": start.date().isoformat(), "user": count})
+            self.latest[stat_type] = start
+            start = end
+            end = start + interval
+
+    def user_count(self, start, end):
+        return len(
+            self.messages.distinct("user", {"createdAt": {"$gte": start, "$lt": end}})
+        )
+
+    def render_GET(self, request):
+        # Update statistics if necessary
+        start = self.latest["daily"] + timedelta(days=1)
+        self.update_statistics("daily", start, timedelta(days=1))
+
+        # Set the response code and content type
+        request.setHeader(b"Content-Type", b"application/json")
+        request.setResponseCode(200)  # HTTP status code
+
+        # Return the response as JSON
+        return json.dumps(self.statistics).encode("utf-8")
+
+
 if __name__ == "__main__":
-    # Get MongoDB URI and Prometheus port from environment variables
+    # Get MongoDB URI and initialize database connection
     mongodb_uri = os.getenv("MONGODB_URI", "mongodb://mongodb:27017/")
+    mongodb = MongoClient(mongodb_uri)["LibreChat"]
 
     port = 8000
 
     # Start the Prometheus exporter
-    collector = LibreChatMetricsCollector(mongodb_uri)
+    collector = LibreChatMetricsCollector(mongodb)
     REGISTRY.register(collector)
     logger.info("Starting server on port %i", port)
 
@@ -350,6 +406,7 @@ if __name__ == "__main__":
     metrics = MetricsResource()
     root.putChild(b"", metrics)
     root.putChild(b"metrics", metrics)
+    root.putChild(b"infinity", InfinityResource(mongodb))
 
     reactor.listenTCP(port, Site(root))
     reactor.run()
