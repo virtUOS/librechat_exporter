@@ -57,6 +57,9 @@ MONGODB_URI=mongodb://mongodb:27017/
 
 # Configure log level
 LOGGING_LEVEL=info
+
+# Specify Mongo Database - Optional. Defaults to "LibreChat"
+MONGODB_DATABASE=librechat
 ```
 
 ### 4. Run the Script
