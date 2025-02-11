@@ -28,7 +28,7 @@ class LibreChatMetricsCollector(Collector):
         Initialize the MongoDB client and set up initial state.
         """
         self.client = MongoClient(mongodb_uri)
-        self.db = self.client["LibreChat"]
+        self.db = self.client[os.getenv("MONGODB_DATABASE", "LibreChat")]
         self.messages_collection = self.db["messages"]
 
     def collect(self):
