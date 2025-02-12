@@ -1,9 +1,13 @@
 import json
 import logging
 import os
+import shutil
+import tempfile
+import time
 from datetime import datetime, timedelta, timezone
 
 from dotenv import load_dotenv
+from prometheus_client import start_http_server
 from prometheus_client.core import REGISTRY, GaugeMetricFamily
 from prometheus_client.registry import Collector
 from prometheus_client.twisted import MetricsResource
@@ -337,8 +341,7 @@ class LibreChatMetricsCollector(Collector):
 
 class InfinityResource(Resource):
     isLeaf = True
-    statistics = {"daily": [], "weekly": []}
-    latest = {"daily": datetime.today(), "weekly": datetime.today()}
+    stat_types = ("daily", "weekly", "monthly", "yearly")
 
     def __init__(self, mongodb):
         """
@@ -346,31 +349,78 @@ class InfinityResource(Resource):
         """
         self.messages = mongodb["messages"]
 
-        # Get oldest message to use this as a start point for getting daily statistics
-        today = datetime.today().replace(hour=0, minute=0, second=0, microsecond=0)
-        start = today
-        for message in self.messages.find().sort("createdAt", 1).limit(1):
-            start = message["createdAt"].replace(
-                hour=0, minute=0, second=0, microsecond=0
-            )
-        logger.info("Generating daily statistics at %s", start)
-        self.update_statistics("daily", start, timedelta(days=1))
+        # Load stored statistics
+        try:
+            statistics_file = os.getenv("STATISTICS_FILE", "statistics.json")
+            with open(statistics_file, "rb") as f:
+                logger.info("Loading cached statistics from %s", statistics_file)
+                self.statistics = json.load(f)
+        except FileNotFoundError:
+            logger.debug("No cached statistics exist")
+            self.statistics = {t: [] for t in self.stat_types}
 
-        start = start - timedelta(days=start.weekday())
-        logger.info("Generating weekly statistics at %s", start)
-        self.update_statistics("weekly", start, timedelta(weeks=1))
+        # Initial update of statistics
+        self.update_statistics()
 
-    def update_statistics(self, stat_type, start, interval):
-        today = datetime.today()
-        stats = self.statistics[stat_type]
-        end = start + interval
-        while end < today:
-            logger.info("Getting %s users from %s", stat_type, start)
-            count = self.user_count(start, end)
-            stats.append({"date": start.date().isoformat(), "user": count})
-            self.latest[stat_type] = start
-            start = end
-            end = start + interval
+        self.save_cache()
+
+    def save_cache(self):
+        statistics_file = os.getenv("STATISTICS_FILE", "statistics.json")
+        logger.info("Saving statistics to %s", statistics_file)
+        with tempfile.NamedTemporaryFile(mode="w", delete=False) as temp:
+            json.dump(self.statistics, temp)
+            temp_file = temp.name
+        logger.debug("Moving %s to %s", temp_file, statistics_file)
+        shutil.move(temp_file, statistics_file)
+
+    def next_step(self, date, stat_type):
+        if stat_type == "yearly":
+            return datetime(year=date.year + 1, month=1, day=1)
+        elif stat_type == "monthly":
+            date = date.replace(day=15) + timedelta(days=30)
+            return datetime(year=date.year, month=date.month, day=1)
+        elif stat_type == "weekly":
+            date = date + timedelta(days=7 - date.weekday())
+            return datetime(year=date.year, month=date.month, day=date.day)
+        elif stat_type == "daily":
+            date = date + timedelta(days=1)
+            return datetime(year=date.year, month=date.month, day=date.day)
+        raise Exception(f"Unknown stat type: {stat_type}")
+
+    def statistics_start(self, stat_type):
+        stats = self.statistics.get(stat_type)
+        if stats:
+            latest = stats[-1].get("date")
+            date = datetime.fromisoformat(latest)
+            return self.next_step(date, stat_type)
+        else:
+            self.statistics[stat_type] = []
+            # Get oldest message to use this as a start point for getting daily statistics
+            start = datetime.today()
+            for message in self.messages.find().sort("createdAt", 1).limit(1):
+                start = message["createdAt"]
+            if stat_type == "yearly":
+                return datetime(year=start.year, month=1, day=1)
+            elif stat_type == "monthly":
+                return datetime(year=start.year, month=start.month, day=1)
+            elif stat_type == "weekly":
+                start = start - timedelta(days=start.weekday())
+                return datetime(year=start.year, month=start.month, day=start.day)
+            return datetime(year=start.year, month=start.month, day=start.day)
+
+    def update_statistics(self):
+        for stat_type in self.stat_types:
+            today = datetime.today()
+            start = self.statistics_start(stat_type)
+            end = self.next_step(start, stat_type)
+            stats = self.statistics[stat_type]
+            while end < today:
+                logger.info("Getting %s users from %s", stat_type, start)
+                count = self.user_count(start, end)
+                stats.append({"date": start.date().isoformat(), "user": count})
+                start = end
+                end = self.next_step(end, stat_type)
+        logger.debug("Statistics %s", self.statistics)
 
     def user_count(self, start, end):
         return len(
@@ -379,8 +429,14 @@ class InfinityResource(Resource):
 
     def render_GET(self, request):
         # Update statistics if necessary
-        start = self.latest["daily"] + timedelta(days=1)
-        self.update_statistics("daily", start, timedelta(days=1))
+        self.update_statistics()
+
+        # Get time frame parameters
+        begin_ts = float(request.args.get(b"from", [0])[0]) / 1000.0
+        begin = datetime.fromtimestamp(begin_ts)
+        end_ts = float(request.args.get(b"to", [time.time() * 1000.0])[0]) / 1000.0
+        end = datetime.fromtimestamp(end_ts)
+        logger.info("from: %s -> %s", begin, end)
 
         # Set the response code and content type
         request.setHeader(b"Content-Type", b"application/json")

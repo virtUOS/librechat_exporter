@@ -98,6 +98,7 @@ metrics:
   environment:
     - MONGODB_URI=mongodb://mongodb:27017/
     - LOGGING_LEVEL=info
+    - TZ=Europe/Berlin
   restart: unless-stopped
 ```
 
