@@ -3,7 +3,7 @@ import os
 from datetime import datetime, timedelta, timezone
 
 from dotenv import load_dotenv
-from prometheus_client.core import REGISTRY, GaugeMetricFamily
+from prometheus_client.core import REGISTRY, GaugeMetricFamily, CounterMetricFamily
 from prometheus_client.registry import Collector
 from prometheus_client.twisted import MetricsResource
 from pymongo import MongoClient
@@ -66,8 +66,8 @@ class LibreChatMetricsCollector(Collector):
         try:
             total_messages = self.messages_collection.estimated_document_count()
             logger.debug("Messages count: %s", total_messages)
-            yield GaugeMetricFamily(
-                "librechat_messages",
+            yield CounterMetricFamily(
+                "librechat_messages_total",
                 "Number of sent messages stored in the database",
                 value=total_messages,
             )
@@ -81,8 +81,8 @@ class LibreChatMetricsCollector(Collector):
         try:
             total_errors = self.messages_collection.count_documents({"error": True})
             logger.debug("Error message count: %s", total_errors)
-            yield GaugeMetricFamily(
-                "librechat_error_messages",
+            yield CounterMetricFamily(
+                "librechat_error_messages_total",
                 "Number of error messages stored in the database",
                 value=total_errors,
             )
@@ -106,8 +106,8 @@ class LibreChatMetricsCollector(Collector):
             results = list(self.messages_collection.aggregate(pipeline))
             total_input_tokens = results[0]["totalInputTokens"] if results else 0
             logger.debug("Total input tokens: %s", total_input_tokens)
-            yield GaugeMetricFamily(
-                "librechat_input_tokens",
+            yield CounterMetricFamily(
+                "librechat_input_tokens_total",
                 "Number of input tokens processed",
                 value=total_input_tokens,
             )
@@ -131,8 +131,8 @@ class LibreChatMetricsCollector(Collector):
             results = list(self.messages_collection.aggregate(pipeline))
             total_output_tokens = results[0]["totalOutputTokens"] if results else 0
             logger.debug("Total output tokens: %s", total_output_tokens)
-            yield GaugeMetricFamily(
-                "librechat_output_tokens",
+            yield CounterMetricFamily(
+                "librechat_output_tokens_total",
                 "Total number of output tokens generated",
                 value=total_output_tokens,
             )
@@ -146,8 +146,8 @@ class LibreChatMetricsCollector(Collector):
         try:
             total_conversations = self.db["conversations"].estimated_document_count()
             logger.debug("Total conversations: %s", total_conversations)
-            yield GaugeMetricFamily(
-                "librechat_conversations",
+            yield CounterMetricFamily(
+                "librechat_conversations_total",
                 "Number of started conversations stored in the database",
                 value=total_conversations,
             )
@@ -164,8 +164,8 @@ class LibreChatMetricsCollector(Collector):
                 {"$group": {"_id": "$model", "messageCount": {"$sum": 1}}},
             ]
             results = self.messages_collection.aggregate(pipeline)
-            metric = GaugeMetricFamily(
-                "librechat_messages_per_model",
+            metric = CounterMetricFamily(
+                "librechat_messages_per_model_total",
                 "Number of messages per model",
                 labels=["model"],
             )
@@ -188,8 +188,8 @@ class LibreChatMetricsCollector(Collector):
                 {"$group": {"_id": "$model", "errorCount": {"$sum": 1}}},
             ]
             results = self.messages_collection.aggregate(pipeline)
-            metric = GaugeMetricFamily(
-                "librechat_errors_per_model",
+            metric = CounterMetricFamily(
+                "librechat_errors_per_model_total",
                 "Number of error messages per model",
                 labels=["model"],
             )
@@ -225,8 +225,8 @@ class LibreChatMetricsCollector(Collector):
                 },
             ]
             results = self.messages_collection.aggregate(pipeline)
-            metric = GaugeMetricFamily(
-                "librechat_input_tokens_per_model",
+            metric = CounterMetricFamily(
+                "librechat_input_tokens_per_model_total",
                 "Number of input tokens per model",
                 labels=["model"],
             )
@@ -260,8 +260,8 @@ class LibreChatMetricsCollector(Collector):
                 },
             ]
             results = self.messages_collection.aggregate(pipeline)
-            metric = GaugeMetricFamily(
-                "librechat_output_tokens_per_model",
+            metric = CounterMetricFamily(
+                "librechat_output_tokens_per_model_total",
                 "Number of output tokens per model",
                 labels=["model"],
             )
@@ -314,6 +314,20 @@ class LibreChatMetricsCollector(Collector):
         except Exception as e:
             logger.exception("Error collecting number of active conversations: %s", e)
 
+    def collect_uploaded_file_count(self):
+        """
+        Collect number of uploaded files.
+        """
+        try:
+            file_count = self.db["files"].estimated_document_count()
+            yield CounterMetricFamily(
+                "librechat_uploaded_files_total",
+                "Number of uploaded files",
+                value=file_count,
+            )
+        except Exception as e:
+            logger.exception("Error collecting uploaded files: %s", e)
+
     def collect_registerd_user_count(self):
         """
         Collect number of registered users.
@@ -321,27 +335,13 @@ class LibreChatMetricsCollector(Collector):
         try:
             user_count = self.db["users"].estimated_document_count()
             logger.debug("Number of registered users: %s", user_count)
-            yield GaugeMetricFamily(
-                "librechat_registered_users",
+            yield CounterMetricFamily(
+                "librechat_registered_users_total",
                 "Number of registered users",
                 value=user_count,
             )
         except Exception as e:
             logger.exception("Error collecting number of registered users: %s", e)
-
-    def collect_uploaded_file_count(self):
-        """
-        Collect number of uploaded files.
-        """
-        try:
-            file_count = self.db["files"].estimated_document_count()
-            yield GaugeMetricFamily(
-                "librechat_uploaded_files",
-                "Number of uploaded files",
-                value=file_count,
-            )
-        except Exception as e:
-            logger.exception("Error collecting uploaded files: %s", e)
 
     def collect_daily_unique_users(self):
         """
