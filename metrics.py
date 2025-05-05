@@ -51,6 +51,13 @@ class LibreChatMetricsCollector(Collector):
         yield from self.collect_active_conversation_count()
         yield from self.collect_uploaded_file_count()
         yield from self.collect_registerd_user_count()
+        # Adding new time-based metrics
+        yield from self.collect_daily_unique_users()
+        yield from self.collect_weekly_unique_users()
+        yield from self.collect_monthly_unique_users()
+        yield from self.collect_messages_5m()
+        yield from self.collect_messages_per_model_5m()
+        yield from self.collect_token_counts_5m()
 
     def collect_message_count(self):
         """
@@ -335,6 +342,242 @@ class LibreChatMetricsCollector(Collector):
             )
         except Exception as e:
             logger.exception("Error collecting uploaded files: %s", e)
+
+    def collect_daily_unique_users(self):
+        """
+        Collect number of unique users active in the current day.
+        """
+        try:
+            start_of_day = datetime.now(timezone.utc).replace(
+                hour=0, minute=0, second=0, microsecond=0
+            )
+            unique_users = len(
+                self.messages_collection.distinct(
+                    "user", {"createdAt": {"$gte": start_of_day}}
+                )
+            )
+            logger.debug("Daily unique users: %s", unique_users)
+            yield GaugeMetricFamily(
+                "librechat_daily_unique_users",
+                "Number of unique users active in the current day",
+                value=unique_users,
+            )
+        except Exception as e:
+            logger.exception("Error collecting daily unique users: %s", e)
+
+    def collect_weekly_unique_users(self):
+        """
+        Collect number of unique users active in the current week (starting from Monday).
+        """
+        try:
+            now = datetime.now(timezone.utc)
+            # Calculate days since Monday (0=Monday, 1=Tuesday, etc.)
+            days_since_monday = now.weekday()
+            # Get the start of current week (Monday 00:00:00)
+            start_of_week = (now - timedelta(days=days_since_monday)).replace(
+                hour=0, minute=0, second=0, microsecond=0
+            )
+            
+            unique_users = len(
+                self.messages_collection.distinct(
+                    "user", {"createdAt": {"$gte": start_of_week}}
+                )
+            )
+            logger.debug("Weekly unique users: %s", unique_users)
+            yield GaugeMetricFamily(
+                "librechat_weekly_unique_users",
+                "Number of unique users active in the current week (starting from Monday)",
+                value=unique_users,
+            )
+        except Exception as e:
+            logger.exception("Error collecting weekly unique users: %s", e)
+
+    def collect_monthly_unique_users(self):
+        """
+        Collect number of unique users active in the current month.
+        """
+        try:
+            now = datetime.now(timezone.utc)
+            # Get the start of current month (1st day 00:00:00)
+            start_of_month = now.replace(
+                day=1, hour=0, minute=0, second=0, microsecond=0
+            )
+            
+            unique_users = len(
+                self.messages_collection.distinct(
+                    "user", {"createdAt": {"$gte": start_of_month}}
+                )
+            )
+            logger.debug("Monthly unique users: %s", unique_users)
+            yield GaugeMetricFamily(
+                "librechat_monthly_unique_users",
+                "Number of unique users active in the current month",
+                value=unique_users,
+            )
+        except Exception as e:
+            logger.exception("Error collecting monthly unique users: %s", e)
+
+    def collect_messages_5m(self):
+        """
+        Collect message counts for the last 5 minutes.
+        """
+        try:
+            now = datetime.now(timezone.utc)
+            five_minutes_ago = now - timedelta(minutes=5)
+
+            # 5-minute message count
+            five_min_count = self.messages_collection.count_documents(
+                {"createdAt": {"$gte": five_minutes_ago}}
+            )
+            yield GaugeMetricFamily(
+                "librechat_messages_5m",
+                "Number of messages sent in the last 5 minutes",
+                value=five_min_count,
+            )
+            logger.debug("Messages in last 5 minutes: %s", five_min_count)
+
+        except Exception as e:
+            logger.exception("Error collecting messages per time period: %s", e)
+
+    def collect_messages_per_model_5m(self):
+        """
+        Collect message counts per model for the last 5 minutes.
+        """
+        try:
+            now = datetime.now(timezone.utc)
+            five_minutes_ago = now - timedelta(minutes=5)
+
+            # 5-minute messages per model
+            pipeline_5m = [
+                {
+                    "$match": {
+                        "sender": {"$ne": "User"},
+                        "createdAt": {"$gte": five_minutes_ago},
+                    }
+                },
+                {"$group": {"_id": "$model", "count": {"$sum": 1}}},
+            ]
+            results_5m = self.messages_collection.aggregate(pipeline_5m)
+            metric_5m = GaugeMetricFamily(
+                "librechat_messages_per_model_5m",
+                "Number of messages per model in the last 5 minutes",
+                labels=["model"],
+            )
+            for result in results_5m:
+                model = result["_id"] or "unknown"
+                count = result["count"]
+                metric_5m.add_metric([model], count)
+                logger.debug("Messages in last 5 minutes for model %s: %s", model, count)
+            yield metric_5m
+
+        except Exception as e:
+            logger.exception("Error collecting messages per model per time period: %s", e)
+
+    def collect_token_counts_5m(self):
+        """
+        Collect token counts for the last 5 minutes.
+        """
+        try:
+            now = datetime.now(timezone.utc)
+            five_minutes_ago = now - timedelta(minutes=5)
+
+            # 5-minute input tokens
+            pipeline_input_5m = [
+                {
+                    "$match": {
+                        "sender": "User",
+                        "tokenCount": {"$exists": True, "$ne": None},
+                        "createdAt": {"$gte": five_minutes_ago},
+                    }
+                },
+                {"$group": {"_id": None, "totalTokens": {"$sum": "$tokenCount"}}},
+            ]
+            results_input_5m = list(self.messages_collection.aggregate(pipeline_input_5m))
+            input_tokens_5m = results_input_5m[0]["totalTokens"] if results_input_5m else 0
+            yield GaugeMetricFamily(
+                "librechat_input_tokens_5m",
+                "Number of input tokens used in the last 5 minutes",
+                value=input_tokens_5m,
+            )
+            logger.debug("Input tokens in last 5 minutes: %s", input_tokens_5m)
+
+            # 5-minute output tokens
+            pipeline_output_5m = [
+                {
+                    "$match": {
+                        "sender": {"$ne": "User"},
+                        "tokenCount": {"$exists": True, "$ne": None},
+                        "createdAt": {"$gte": five_minutes_ago},
+                    }
+                },
+                {"$group": {"_id": None, "totalTokens": {"$sum": "$tokenCount"}}},
+            ]
+            results_output_5m = list(self.messages_collection.aggregate(pipeline_output_5m))
+            output_tokens_5m = results_output_5m[0]["totalTokens"] if results_output_5m else 0
+            yield GaugeMetricFamily(
+                "librechat_output_tokens_5m",
+                "Number of output tokens generated in the last 5 minutes",
+                value=output_tokens_5m,
+            )
+            logger.debug("Output tokens in last 5 minutes: %s", output_tokens_5m)
+
+            # Per-model token counts (5m)
+            pipeline_model_tokens_5m = [
+                {
+                    "$match": {
+                        "tokenCount": {"$exists": True, "$ne": None},
+                        "model": {"$exists": True, "$ne": None},
+                        "createdAt": {"$gte": five_minutes_ago},
+                    }
+                },
+                {
+                    "$group": {
+                        "_id": {"model": "$model", "sender": "$sender"},
+                        "totalTokens": {"$sum": "$tokenCount"},
+                    }
+                },
+            ]
+            results_model_tokens_5m = self.messages_collection.aggregate(pipeline_model_tokens_5m)
+            
+            input_metric_5m = GaugeMetricFamily(
+                "librechat_model_input_tokens_5m",
+                "Input tokens per model in the last 5 minutes",
+                labels=["model"],
+            )
+            
+            output_metric_5m = GaugeMetricFamily(
+                "librechat_model_output_tokens_5m",
+                "Output tokens per model in the last 5 minutes",
+                labels=["model"],
+            )
+            
+            model_tokens_map = {}
+            for result in results_model_tokens_5m:
+                model = result["_id"]["model"] or "unknown"
+                sender_type = result["_id"]["sender"]
+                tokens = result["totalTokens"]
+                
+                if model not in model_tokens_map:
+                    model_tokens_map[model] = {"input": 0, "output": 0}
+                
+                if sender_type == "User":
+                    model_tokens_map[model]["input"] += tokens
+                else:
+                    model_tokens_map[model]["output"] += tokens
+            
+            for model, counts in model_tokens_map.items():
+                input_metric_5m.add_metric([model], counts["input"])
+                output_metric_5m.add_metric([model], counts["output"])
+                logger.debug(
+                    "Model %s tokens in last 5 minutes: input=%s, output=%s",
+                    model, counts["input"], counts["output"]
+                )
+            
+            yield input_metric_5m
+            yield output_metric_5m
+
+        except Exception as e:
+            logger.exception("Error collecting token counts per time period: %s", e)
 
 
 if __name__ == "__main__":
