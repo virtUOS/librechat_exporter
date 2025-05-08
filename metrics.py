@@ -377,7 +377,7 @@ class LibreChatMetricsCollector(Collector):
             start_of_week = (now - timedelta(days=days_since_monday)).replace(
                 hour=0, minute=0, second=0, microsecond=0
             )
-            
+
             unique_users = len(
                 self.messages_collection.distinct(
                     "user", {"createdAt": {"$gte": start_of_week}}
@@ -402,7 +402,7 @@ class LibreChatMetricsCollector(Collector):
             start_of_month = now.replace(
                 day=1, hour=0, minute=0, second=0, microsecond=0
             )
-            
+
             unique_users = len(
                 self.messages_collection.distinct(
                     "user", {"createdAt": {"$gte": start_of_month}}
@@ -538,33 +538,33 @@ class LibreChatMetricsCollector(Collector):
                 },
             ]
             results_model_tokens_5m = self.messages_collection.aggregate(pipeline_model_tokens_5m)
-            
+
             input_metric_5m = GaugeMetricFamily(
                 "librechat_model_input_tokens_5m",
                 "Input tokens per model in the last 5 minutes",
                 labels=["model"],
             )
-            
+
             output_metric_5m = GaugeMetricFamily(
                 "librechat_model_output_tokens_5m",
                 "Output tokens per model in the last 5 minutes",
                 labels=["model"],
             )
-            
+
             model_tokens_map = {}
             for result in results_model_tokens_5m:
                 model = result["_id"]["model"] or "unknown"
                 sender_type = result["_id"]["sender"]
                 tokens = result["totalTokens"]
-                
+
                 if model not in model_tokens_map:
                     model_tokens_map[model] = {"input": 0, "output": 0}
-                
+
                 if sender_type == "User":
                     model_tokens_map[model]["input"] += tokens
                 else:
                     model_tokens_map[model]["output"] += tokens
-            
+
             for model, counts in model_tokens_map.items():
                 input_metric_5m.add_metric([model], counts["input"])
                 output_metric_5m.add_metric([model], counts["output"])
@@ -572,7 +572,7 @@ class LibreChatMetricsCollector(Collector):
                     "Model %s tokens in last 5 minutes: input=%s, output=%s",
                     model, counts["input"], counts["output"]
                 )
-            
+
             yield input_metric_5m
             yield output_metric_5m
 
