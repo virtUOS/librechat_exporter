@@ -39,6 +39,13 @@ cd librechat-metrics
 
 ### 2. Install Dependencies
 
+Use environment (strongly recommended!)
+
+```sh
+python -m venv venv
+source venv/bin/activate
+```
+
 Install the required Python packages using pip:
 
 ```sh
@@ -185,3 +192,128 @@ Query the metrics endpoint:
 ```sh
 curl -sf http://localhost:8000
 ```
+
+## Historical Metrics Analysis
+
+In addition to real-time metrics monitoring, this tool supports historical analysis of LibreChat metrics using MariaDB and Grafana.
+
+### Prerequisites for Historical Analysis
+
+- **MariaDB** or MySQL server (supplied via docker in this repo)
+- **Grafana** for visualization (supplied via docker in this repo)
+- **Python 3.6+** with pymongo and mysql-connector-python (supplied via requirements.txt)
+
+### Setup for Historical Analysis
+
+#### 1. Clone the Repository
+
+Clone the repository and navigate to the historic-analysis directory:
+
+```bash
+git clone https://github.com/yourusername/librechat-metrics.git
+cd librechat-metrics/historic-analysis
+```
+
+#### 2. Start the Docker Containers
+
+The historical analysis uses Docker Compose to set up MariaDB and Grafana:
+
+```bash
+docker-compose up -d
+```
+
+This will start:
+- MariaDB database on port 3306
+- Grafana on port 3000
+
+Note: There is a commented-out PHPMyAdmin service in the docker-compose.yml file that you can enable for database management if needed.
+
+#### 3. Install Python Dependencies
+
+Refer to [Install Dependencies](#2-install-dependencies) section above for setting up the Python virtual environment.
+
+### Exporting Metrics from MongoDB to MariaDB
+
+The `export_metrics.py` script extracts historical data from MongoDB and loads it into MariaDB for analysis:
+
+```bash
+python export_metrics.py YYYY-MM-DD YYYY-MM-DD
+```
+
+Replace the date arguments with the start and end dates for your analysis period.
+
+Example:
+```bash
+# Export metrics from January 1, 2024 to April 30, 2024
+python export_metrics.py 2024-01-01 2024-04-30
+```
+
+The script will:
+1. Clear existing metrics tables in MariaDB
+2. Calculate daily metrics for each day in the specified range
+3. Calculate weekly metrics (on Sundays)
+4. Calculate monthly metrics (on the last day of each month)
+
+The metrics include:
+- Unique users per day/week/month
+- Total messages and conversations
+- Message counts by model
+- Token usage by model
+- Error counts by model
+
+### Viewing Metrics in Grafana
+
+#### 1. Access Grafana
+
+Once the containers are running, access Grafana at:
+```
+http://localhost:3000
+```
+
+Default login credentials:
+- Username: admin
+- Password: admin
+
+#### 2. Configure MariaDB Data Source
+
+1. Navigate to **Configuration** → **Data Sources**
+2. Click **Add data source**
+3. Select **MySQL**
+4. Configure the connection:
+   - Host: `mariadb:3306`
+   - Database: `metrics`
+   - User: `metrics`
+   - Password: `metrics`
+   - SSL Mode: `disable`
+5. Click **Save & Test**
+
+#### 3. Import the Dashboard
+
+1. Navigate to **Create** → **Import**
+2. Click **Upload JSON file** and select the `Grafana-Dashboard-template.json` file
+3. Click **Import**
+
+The dashboard provides visualizations for:
+- Messages and tokens per user over time
+- Daily unique users
+- Weekly unique users
+- Monthly unique users
+
+### Customizing the Analysis
+
+#### Database Schema
+
+The MariaDB schema is defined in `mariadb-init/init.sql` and includes tables for:
+- Daily user metrics
+- Daily message metrics
+- Daily messages by model
+- Daily tokens by model
+- Daily errors by model
+- Weekly user metrics
+- Monthly user metrics
+
+You can modify this file to add additional metrics tables before starting the containers. When you start first time, it will create all needed tables.
+
+#### Grafana Dashboard
+
+The dashboard template (`Grafana-Dashboard-template.json`) can be customized within Grafana's interface to add new panels or modify existing ones based on your specific needs.

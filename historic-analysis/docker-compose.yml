@@ -1,0 +1,42 @@
+version: '3.8'
+
+services:
+  mariadb:
+    image: mariadb:lts
+    container_name: mariadb
+    environment:
+      MYSQL_ROOT_PASSWORD: secret
+      MYSQL_METRICS_DATABASE: metrics
+      MYSQL_METRICS_USER: metrics
+      MYSQL_METRICS_PASSWORD: metrics
+    ports:
+      - "3306:3306"
+    volumes:
+      - ./mariadb_data:/var/lib/mysql
+      - ./mariadb-init:/docker-entrypoint-initdb.d
+    command: --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci
+
+# use for debugging when needed
+  # phpmyadmin:
+  #   image: phpmyadmin/phpmyadmin:latest
+  #   depends_on:
+  #     - mariadb
+  #   environment:
+  #     PMA_HOST: mariadb
+  #     MYSQL_ROOT_PASSWORD: secret
+  #   ports:
+  #     - "8081:80"
+  grafana:
+    image: grafana/grafana-enterprise
+    container_name: grafana
+    restart: unless-stopped
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_INSTALL_PLUGINS: grafana-clock-panel,grafana-simple-json-datasource
+    ports:
+     - '3000:3000'
+    volumes:
+      - ./grafana_data:/var/lib/grafana
+    depends_on:
+      - mariadb

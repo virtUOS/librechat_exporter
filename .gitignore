@@ -1,0 +1,5 @@
+data/*
+prometheus-dev/prometheus-data/*
+mariadb_data
+grafana_data
+mariadb-dev/init/init.sql
