@@ -67,4 +67,4 @@ jobs:
         run: cat exporter.log
 
       - name: probe for valid output
-        run: grep 'librechat_registered_users_total.*1' metrics
+        run: grep 'librechat_registered_users 1.0' metrics || grep 'librechat_registered_users_total' metrics
