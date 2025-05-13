@@ -117,42 +117,90 @@ Make sure the networks attribute is the same as your mongodb container.
 The exporter provides the following metrics specific to LibreChat:
 
 ```sh
-# HELP librechat_messages Number of sent messages stored in the database
-# TYPE librechat_messages gauge
-librechat_messages 9.0
-# HELP librechat_error_messages Number of error messages stored in the database
-# TYPE librechat_error_messages gauge
-librechat_error_messages 0.0
-# HELP librechat_input_tokens Number of input tokens processed
-# TYPE librechat_input_tokens gauge
-librechat_input_tokens 0.0
-# HELP librechat_output_tokens Total number of output tokens generated
-# TYPE librechat_output_tokens gauge
-librechat_output_tokens 0.0
-# HELP librechat_conversations Number of started conversations stored in the database
-# TYPE librechat_conversations gauge
-librechat_conversations 0.0
-# HELP librechat_messages_per_model Number of messages per model
-# TYPE librechat_messages_per_model gauge
-librechat_messages_per_model{model="unknown"} 9.0
-# HELP librechat_errors_per_model Number of error messages per model
-# TYPE librechat_errors_per_model gauge
-# HELP librechat_input_tokens_per_model Number of input tokens per model
-# TYPE librechat_input_tokens_per_model gauge
-# HELP librechat_output_tokens_per_model Number of output tokens per model
-# TYPE librechat_output_tokens_per_model gauge
-# HELP librechat_active_users Number of active users
+# HELP librechat_messages_total Number of sent messages stored in the database
+# TYPE librechat_messages_total counter
+librechat_messages_total 9.0
+
+# HELP librechat_error_messages_total Number of error messages stored in the database
+# TYPE librechat_error_messages_total counter
+librechat_error_messages_total 0.0
+
+# HELP librechat_input_tokens_total Number of input tokens processed
+# TYPE librechat_input_tokens_total counter
+librechat_input_tokens_total 0.0
+
+# HELP librechat_output_tokens_total Total number of output tokens generated
+# TYPE librechat_output_tokens_total counter
+librechat_output_tokens_total 0.0
+
+# HELP librechat_conversations_total Number of started conversations stored in the database
+# TYPE librechat_conversations_total counter
+librechat_conversations_total 0.0
+
+# HELP librechat_messages_per_model_total Number of messages per model
+# TYPE librechat_messages_per_model_total counter
+librechat_messages_per_model_total{model="unknown"} 9.0
+
+# HELP librechat_errors_per_model_total Number of error messages per model
+# TYPE librechat_errors_per_model_total counter
+
+# HELP librechat_input_tokens_per_model_total Number of input tokens per model
+# TYPE librechat_input_tokens_per_model_total counter
+
+# HELP librechat_output_tokens_per_model_total Number of output tokens per model
+# TYPE librechat_output_tokens_per_model_total counter
+
+# HELP librechat_active_users Number of active users in the last 5 minutes
 # TYPE librechat_active_users gauge
 librechat_active_users 2.0
-# HELP librechat_active_conversations Number of active conversations
+
+# HELP librechat_active_conversations Number of active conversations in the last 5 minutes
 # TYPE librechat_active_conversations gauge
 librechat_active_conversations 0.0
-# HELP librechat_uploaded_files Number of uploaded files
-# TYPE librechat_uploaded_files gauge
-librechat_uploaded_files 1.0
-# HELP librechat_registered_users Number of registered users
-# TYPE librechat_registered_users gauge
-librechat_registered_users 1.0
+
+# HELP librechat_uploaded_files_total Number of uploaded files
+# TYPE librechat_uploaded_files_total counter
+librechat_uploaded_files_total 1.0
+
+# HELP librechat_registered_users_total Number of registered users
+# TYPE librechat_registered_users_total counter
+librechat_registered_users_total 1.0
+
+# HELP librechat_daily_unique_users Number of unique users active in the current day
+# TYPE librechat_daily_unique_users gauge
+librechat_daily_unique_users 2.0
+
+# HELP librechat_weekly_unique_users Number of unique users active in the current week (starting from Monday)
+# TYPE librechat_weekly_unique_users gauge
+librechat_weekly_unique_users 3.0
+
+# HELP librechat_monthly_unique_users Number of unique users active in the current month
+# TYPE librechat_monthly_unique_users gauge
+librechat_monthly_unique_users 4.0
+
+# HELP librechat_messages_5m Number of messages sent in the last 5 minutes
+# TYPE librechat_messages_5m gauge
+librechat_messages_5m 5.0
+
+# HELP librechat_messages_per_model_5m Number of messages per model in the last 5 minutes
+# TYPE librechat_messages_per_model_5m gauge
+librechat_messages_per_model_5m{model="gpt-4"} 3.0
+
+# HELP librechat_input_tokens_5m Number of input tokens used in the last 5 minutes
+# TYPE librechat_input_tokens_5m gauge
+librechat_input_tokens_5m 100.0
+
+# HELP librechat_output_tokens_5m Number of output tokens generated in the last 5 minutes
+# TYPE librechat_output_tokens_5m gauge
+librechat_output_tokens_5m 200.0
+
+# HELP librechat_model_input_tokens_5m Input tokens per model in the last 5 minutes
+# TYPE librechat_model_input_tokens_5m gauge
+librechat_model_input_tokens_5m{model="gpt-4"} 50.0
+
+# HELP librechat_model_output_tokens_5m Output tokens per model in the last 5 minutes
+# TYPE librechat_model_output_tokens_5m gauge
+librechat_model_output_tokens_5m{model="gpt-4"} 100.0
 ```
 
 ## Development
