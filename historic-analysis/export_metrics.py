@@ -19,7 +19,6 @@ except Exception as e:
     sys.exit(1)
 
 mongo_db = mongo_client["LibreChat"]
-
 mysql_config = {
     'host': 'localhost',
     'user': 'metrics',
