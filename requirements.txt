@@ -2,3 +2,5 @@ prometheus-client
 pymongo
 python-dotenv
 Twisted
+mysql-connector-python
+python-dateutil
