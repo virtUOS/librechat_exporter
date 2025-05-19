@@ -335,7 +335,7 @@ class LibreChatMetricsCollector(Collector):
         try:
             user_count = self.db["users"].estimated_document_count()
             logger.debug("Number of registered users: %s", user_count)
-            yield CounterMetricFamily(
+            yield GaugeMetricFamily(
                 "librechat_registered_users_total",
                 "Number of registered users",
                 value=user_count,
