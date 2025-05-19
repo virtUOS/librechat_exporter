@@ -50,7 +50,7 @@ class LibreChatMetricsCollector(Collector):
         yield from self.collect_active_user_count()
         yield from self.collect_active_conversation_count()
         yield from self.collect_uploaded_file_count()
-        yield from self.collect_registerd_user_count()
+        yield from self.collect_registered_user_count()
         # Adding new time-based metrics
         yield from self.collect_daily_unique_users()
         yield from self.collect_weekly_unique_users()
@@ -328,7 +328,7 @@ class LibreChatMetricsCollector(Collector):
         except Exception as e:
             logger.exception("Error collecting uploaded files: %s", e)
 
-    def collect_registerd_user_count(self):
+    def collect_registered_user_count(self):
         """
         Collect number of registered users.
         """
