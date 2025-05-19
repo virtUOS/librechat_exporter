@@ -58,6 +58,8 @@ class LibreChatMetricsCollector(Collector):
         yield from self.collect_messages_5m()
         yield from self.collect_messages_per_model_5m()
         yield from self.collect_token_counts_5m()
+        yield from self.collect_error_message_count_5m()
+        yield from self.collect_error_count_per_model_5m()
 
     def collect_message_count(self):
         """
@@ -578,6 +580,61 @@ class LibreChatMetricsCollector(Collector):
 
         except Exception as e:
             logger.exception("Error collecting token counts per time period: %s", e)
+
+    def collect_error_message_count_5m(self):
+        """
+        Collect number of error messages in the last 5 minutes.
+        """
+        try:
+            now = datetime.now(timezone.utc)
+            five_minutes_ago = now - timedelta(minutes=5)
+
+            error_count_5m = self.messages_collection.count_documents(
+                {"error": True, "createdAt": {"$gte": five_minutes_ago}}
+            )
+            yield GaugeMetricFamily(
+                "librechat_error_messages_5m",
+                "Number of error messages in the last 5 minutes",
+                value=error_count_5m,
+            )
+            logger.debug("Error messages in last 5 minutes: %s", error_count_5m)
+        except Exception as e:
+            logger.exception("Error collecting error message count in last 5 minutes: %s", e)
+
+    def collect_error_count_per_model_5m(self):
+        """
+        Collect number of error messages per model in the last 5 minutes.
+        """
+        try:
+            now = datetime.now(timezone.utc)
+            five_minutes_ago = now - timedelta(minutes=5)
+
+            pipeline_5m = [
+                {
+                    "$match": {
+                        "error": True,
+                        "createdAt": {"$gte": five_minutes_ago},
+                        "model": {"$exists": True, "$ne": None},
+                    }
+                },
+                {"$group": {"_id": "$model", "errorCount": {"$sum": 1}}},
+            ]
+            results_5m = self.messages_collection.aggregate(pipeline_5m)
+            metric_5m = GaugeMetricFamily(
+                "librechat_errors_per_model_5m",
+                "Number of error messages per model in the last 5 minutes",
+                labels=["model"],
+            )
+            for result in results_5m:
+                model = result["_id"] or "unknown"
+                error_count = result["errorCount"]
+                metric_5m.add_metric([model], error_count)
+                logger.debug(
+                    "Error messages in last 5 minutes for model %s: %s", model, error_count
+                )
+            yield metric_5m
+        except Exception as e:
+            logger.exception("Error collecting error messages per model in last 5 minutes: %s", e)
 
 
 if __name__ == "__main__":
