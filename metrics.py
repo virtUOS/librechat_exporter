@@ -66,7 +66,7 @@ class LibreChatMetricsCollector(Collector):
         try:
             total_messages = self.messages_collection.estimated_document_count()
             logger.debug("Messages count: %s", total_messages)
-            yield CounterMetricFamily(
+            yield GaugeMetricFamily(
                 "librechat_messages_total",
                 "Number of sent messages stored in the database",
                 value=total_messages,
@@ -106,7 +106,7 @@ class LibreChatMetricsCollector(Collector):
             results = list(self.messages_collection.aggregate(pipeline))
             total_input_tokens = results[0]["totalInputTokens"] if results else 0
             logger.debug("Total input tokens: %s", total_input_tokens)
-            yield CounterMetricFamily(
+            yield GaugeMetricFamily(
                 "librechat_input_tokens_total",
                 "Number of input tokens processed",
                 value=total_input_tokens,
@@ -131,7 +131,7 @@ class LibreChatMetricsCollector(Collector):
             results = list(self.messages_collection.aggregate(pipeline))
             total_output_tokens = results[0]["totalOutputTokens"] if results else 0
             logger.debug("Total output tokens: %s", total_output_tokens)
-            yield CounterMetricFamily(
+            yield GaugeMetricFamily(
                 "librechat_output_tokens_total",
                 "Total number of output tokens generated",
                 value=total_output_tokens,
@@ -146,7 +146,7 @@ class LibreChatMetricsCollector(Collector):
         try:
             total_conversations = self.db["conversations"].estimated_document_count()
             logger.debug("Total conversations: %s", total_conversations)
-            yield CounterMetricFamily(
+            yield GaugeMetricFamily(
                 "librechat_conversations_total",
                 "Number of started conversations stored in the database",
                 value=total_conversations,
@@ -164,7 +164,7 @@ class LibreChatMetricsCollector(Collector):
                 {"$group": {"_id": "$model", "messageCount": {"$sum": 1}}},
             ]
             results = self.messages_collection.aggregate(pipeline)
-            metric = CounterMetricFamily(
+            metric = GaugeMetricFamily(
                 "librechat_messages_per_model_total",
                 "Number of messages per model",
                 labels=["model"],
@@ -225,7 +225,7 @@ class LibreChatMetricsCollector(Collector):
                 },
             ]
             results = self.messages_collection.aggregate(pipeline)
-            metric = CounterMetricFamily(
+            metric = GaugeMetricFamily(
                 "librechat_input_tokens_per_model_total",
                 "Number of input tokens per model",
                 labels=["model"],
@@ -260,7 +260,7 @@ class LibreChatMetricsCollector(Collector):
                 },
             ]
             results = self.messages_collection.aggregate(pipeline)
-            metric = CounterMetricFamily(
+            metric = GaugeMetricFamily(
                 "librechat_output_tokens_per_model_total",
                 "Number of output tokens per model",
                 labels=["model"],
@@ -320,7 +320,7 @@ class LibreChatMetricsCollector(Collector):
         """
         try:
             file_count = self.db["files"].estimated_document_count()
-            yield CounterMetricFamily(
+            yield GaugeMetricFamily(
                 "librechat_uploaded_files_total",
                 "Number of uploaded files",
                 value=file_count,
