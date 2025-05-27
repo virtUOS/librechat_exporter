@@ -60,6 +60,8 @@ class LibreChatMetricsCollector(Collector):
         yield from self.collect_token_counts_5m()
         yield from self.collect_error_message_count_5m()
         yield from self.collect_error_count_per_model_5m()
+        yield from self.collect_artifact_count()
+        yield from self.collect_artifact_count_per_model()
 
     def collect_message_count(self):
         """
@@ -635,6 +637,48 @@ class LibreChatMetricsCollector(Collector):
             yield metric_5m
         except Exception as e:
             logger.exception("Error collecting error messages per model in last 5 minutes: %s", e)
+
+    def collect_artifact_count(self):
+        """
+        Collect total number of messages containing artifacts.
+        """
+        try:
+            artifact_count = self.messages_collection.count_documents(
+                {"text": {"$regex": ":::artifact\\{", "$options": "i"}}
+            )
+            logger.debug("Total artifact messages: %s", artifact_count)
+            yield GaugeMetricFamily(
+                "librechat_artifacts_total",
+                "Total number of messages containing artifacts",
+                value=artifact_count,
+            )
+        except Exception as e:
+            logger.exception("Error collecting artifact count: %s", e)
+
+    def collect_artifact_count_per_model(self):
+        """
+        Collect number of messages containing artifacts per model.
+        """
+        try:
+            pipeline = [
+                {"$match": {"text": {"$regex": ":::artifact\\{", "$options": "i"}}},
+                {"$group": {"_id": "$model", "count": {"$sum": 1}}},
+                {"$sort": {"count": -1}},
+            ]
+            results = self.messages_collection.aggregate(pipeline)
+            metric = GaugeMetricFamily(
+                "librechat_artifacts_per_model_total",
+                "Number of messages containing artifacts per model",
+                labels=["model"],
+            )
+            for result in results:
+                model = result["_id"] or "unknown"
+                count = result["count"]
+                metric.add_metric([model], count)
+                logger.debug("Artifact count for model %s: %s", model, count)
+            yield metric
+        except Exception as e:
+            logger.exception("Error collecting artifact count per model: %s", e)
 
 
 if __name__ == "__main__":
