@@ -24,7 +24,7 @@ jobs:
       - name: start mongodb
         run: docker run --name mongo -p 127.0.0.1:27017:27017 -d mongo:latest
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: set up python ${{ matrix.python-version }}
         uses: actions/setup-python@v5
