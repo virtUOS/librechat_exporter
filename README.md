@@ -12,13 +12,21 @@ The script connects to the MongoDB database used by LibreChat, aggregates releva
 ## Features
 
 - Collects metrics such as:
-  - **Unique users per day**
-  - **Average and standard deviation of users per day**
-  - **Average and standard deviation of messages per user**
-  - **Messages per model per day**
-  - **Average and standard deviation of messages per model per day**
+  - **Unique users per day, week, and month**
+  - **Message and conversation counts**
+  - **Token usage (input/output) per model**
+  - **Error tracking per model**
+  - **Active users and conversations**
+  - **Chat rating metrics** (thumbs up/down, feedback tags, model performance)
+  - **Real-time activity monitoring** (5-minute windows)
+- **Chat Rating Analytics**:
+  - Track user satisfaction with thumbs up/down ratings
+  - Analyze model performance and quality feedback
+  - Monitor rating trends and feedback reasons
+  - Compare model ratings and user preferences
 - Exposes metrics for Prometheus to scrape
 - Designed to run continuously, collecting metrics at regular intervals
+- Full backward compatibility with older LibreChat versions
 
 ## Prerequisites
 
@@ -208,6 +216,60 @@ librechat_model_input_tokens_5m{model="gpt-4"} 50.0
 # HELP librechat_model_output_tokens_5m Output tokens per model in the last 5 minutes
 # TYPE librechat_model_output_tokens_5m gauge
 librechat_model_output_tokens_5m{model="gpt-4"} 100.0
+
+# HELP librechat_thumbs_up_total Total number of thumbs up ratings
+# TYPE librechat_thumbs_up_total gauge
+librechat_thumbs_up_total 15.0
+
+# HELP librechat_thumbs_down_total Total number of thumbs down ratings
+# TYPE librechat_thumbs_down_total gauge
+librechat_thumbs_down_total 3.0
+
+# HELP librechat_thumbs_up_per_model Number of thumbs up ratings per model
+# TYPE librechat_thumbs_up_per_model gauge
+librechat_thumbs_up_per_model{model="gpt-4"} 8.0
+librechat_thumbs_up_per_model{model="claude-3"} 7.0
+
+# HELP librechat_thumbs_down_per_model Number of thumbs down ratings per model
+# TYPE librechat_thumbs_down_per_model gauge
+librechat_thumbs_down_per_model{model="gpt-4"} 1.0
+librechat_thumbs_down_per_model{model="claude-3"} 2.0
+
+# HELP librechat_rating_ratio_per_model Percentage of positive ratings per model (0-100)
+# TYPE librechat_rating_ratio_per_model gauge
+librechat_rating_ratio_per_model{model="gpt-4"} 88.9
+librechat_rating_ratio_per_model{model="claude-3"} 77.8
+
+# HELP librechat_rating_counts_per_tag Number of ratings per feedback tag
+# TYPE librechat_rating_counts_per_tag gauge
+librechat_rating_counts_per_tag{tag="accurate_reliable"} 8.0
+librechat_rating_counts_per_tag{tag="helpful"} 6.0
+librechat_rating_counts_per_tag{tag="creative"} 4.0
+
+# HELP librechat_overall_rating_ratio Overall percentage of positive ratings (0-100)
+# TYPE librechat_overall_rating_ratio gauge
+librechat_overall_rating_ratio 83.3
+
+# HELP librechat_thumbs_up_5m Number of thumbs up ratings in the last 5 minutes
+# TYPE librechat_thumbs_up_5m gauge
+librechat_thumbs_up_5m 2.0
+
+# HELP librechat_thumbs_down_5m Number of thumbs down ratings in the last 5 minutes
+# TYPE librechat_thumbs_down_5m gauge
+librechat_thumbs_down_5m 0.0
+
+# HELP librechat_rated_messages_total Total number of messages that have ratings
+# TYPE librechat_rated_messages_total gauge
+librechat_rated_messages_total 18.0
+
+# HELP librechat_model_tag_thumbs_up Number of thumbs up ratings per model and tag combination
+# TYPE librechat_model_tag_thumbs_up gauge
+librechat_model_tag_thumbs_up{model="gpt-4",tag="accurate_reliable"} 5.0
+librechat_model_tag_thumbs_up{model="claude-3",tag="creative"} 3.0
+
+# HELP librechat_model_tag_thumbs_down Number of thumbs down ratings per model and tag combination
+# TYPE librechat_model_tag_thumbs_down gauge
+librechat_model_tag_thumbs_down{model="gpt-4",tag="unhelpful"} 1.0
 ```
 
 ## Development
