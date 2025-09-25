@@ -921,7 +921,7 @@ class LibreChatMetricsCollector(Collector):
                 elif rating == "thumbsDown":
                     metric_down.add_metric([model, tag], count)
                     logger.debug("Thumbs down for model %s, tag %s: %s", model, tag, count)
-            
+
             yield metric_up
             yield metric_down
         except Exception as e:
