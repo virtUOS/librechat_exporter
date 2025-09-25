@@ -655,10 +655,10 @@ class LibreChatMetricsCollector(Collector):
             thumbs_down_count = self.messages_collection.count_documents({
                 "feedback.rating": "thumbsDown"
             })
-            
+
             logger.debug("Total thumbs up: %s", thumbs_up_count)
             logger.debug("Total thumbs down: %s", thumbs_down_count)
-            
+
             yield GaugeMetricFamily(
                 "librechat_thumbs_up_total",
                 "Total number of thumbs up ratings",
@@ -828,7 +828,7 @@ class LibreChatMetricsCollector(Collector):
         """
         try:
             five_minutes_ago = datetime.now(timezone.utc) - timedelta(minutes=5)
-            
+
             thumbs_up_5m = self.messages_collection.count_documents({
                 "feedback.rating": "thumbsUp",
                 "updatedAt": {"$gte": five_minutes_ago}
@@ -837,10 +837,10 @@ class LibreChatMetricsCollector(Collector):
                 "feedback.rating": "thumbsDown",
                 "updatedAt": {"$gte": five_minutes_ago}
             })
-            
+
             logger.debug("Thumbs up in last 5 minutes: %s", thumbs_up_5m)
             logger.debug("Thumbs down in last 5 minutes: %s", thumbs_down_5m)
-            
+
             yield GaugeMetricFamily(
                 "librechat_thumbs_up_5m",
                 "Number of thumbs up ratings in the last 5 minutes",
@@ -896,7 +896,7 @@ class LibreChatMetricsCollector(Collector):
                 },
             ]
             results = self.messages_collection.aggregate(pipeline)
-            
+
             # Separate metrics for thumbs up and thumbs down
             metric_up = GaugeMetricFamily(
                 "librechat_model_tag_thumbs_up",
@@ -908,13 +908,13 @@ class LibreChatMetricsCollector(Collector):
                 "Number of thumbs down ratings per model and tag combination",
                 labels=["model", "tag"],
             )
-            
+
             for result in results:
                 model = result["_id"]["model"] or "unknown"
                 tag = result["_id"]["tag"] or "unknown"
                 rating = result["_id"]["rating"]
                 count = result["count"]
-                
+
                 if rating == "thumbsUp":
                     metric_up.add_metric([model, tag], count)
                     logger.debug("Thumbs up for model %s, tag %s: %s", model, tag, count)
