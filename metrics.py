@@ -60,6 +60,14 @@ class LibreChatMetricsCollector(Collector):
         yield from self.collect_token_counts_5m()
         yield from self.collect_error_message_count_5m()
         yield from self.collect_error_count_per_model_5m()
+        # Adding new rating metrics
+        yield from self.collect_rating_counts()
+        yield from self.collect_rating_counts_per_model()
+        yield from self.collect_rating_counts_per_tag()
+        yield from self.collect_rating_ratio()
+        yield from self.collect_rating_counts_5m()
+        yield from self.collect_rated_message_count()
+        yield from self.collect_model_tag_combinations()
 
     def collect_message_count(self):
         """
@@ -635,6 +643,289 @@ class LibreChatMetricsCollector(Collector):
             yield metric_5m
         except Exception as e:
             logger.exception("Error collecting error messages per model in last 5 minutes: %s", e)
+
+    def collect_rating_counts(self):
+        """
+        Collect total number of thumbs up and thumbs down ratings.
+        """
+        try:
+            thumbs_up_count = self.messages_collection.count_documents({
+                "feedback.rating": "thumbsUp"
+            })
+            thumbs_down_count = self.messages_collection.count_documents({
+                "feedback.rating": "thumbsDown"
+            })
+
+            logger.debug("Total thumbs up: %s", thumbs_up_count)
+            logger.debug("Total thumbs down: %s", thumbs_down_count)
+
+            yield GaugeMetricFamily(
+                "librechat_thumbs_up_total",
+                "Total number of thumbs up ratings",
+                value=thumbs_up_count,
+            )
+            yield GaugeMetricFamily(
+                "librechat_thumbs_down_total",
+                "Total number of thumbs down ratings",
+                value=thumbs_down_count,
+            )
+        except Exception as e:
+            logger.exception("Error collecting rating counts: %s", e)
+
+    def collect_rating_counts_per_model(self):
+        """
+        Collect rating counts per model.
+        """
+        try:
+            # Thumbs up per model
+            pipeline_up = [
+                {
+                    "$match": {
+                        "feedback.rating": "thumbsUp",
+                        "model": {"$exists": True, "$ne": None}
+                    }
+                },
+                {"$group": {"_id": "$model", "count": {"$sum": 1}}},
+            ]
+            results_up = self.messages_collection.aggregate(pipeline_up)
+            metric_up = GaugeMetricFamily(
+                "librechat_thumbs_up_per_model",
+                "Number of thumbs up ratings per model",
+                labels=["model"],
+            )
+            for result in results_up:
+                model = result["_id"] or "unknown"
+                count = result["count"]
+                metric_up.add_metric([model], count)
+                logger.debug("Thumbs up for model %s: %s", model, count)
+            yield metric_up
+
+            # Thumbs down per model
+            pipeline_down = [
+                {
+                    "$match": {
+                        "feedback.rating": "thumbsDown",
+                        "model": {"$exists": True, "$ne": None}
+                    }
+                },
+                {"$group": {"_id": "$model", "count": {"$sum": 1}}},
+            ]
+            results_down = self.messages_collection.aggregate(pipeline_down)
+            metric_down = GaugeMetricFamily(
+                "librechat_thumbs_down_per_model",
+                "Number of thumbs down ratings per model",
+                labels=["model"],
+            )
+            for result in results_down:
+                model = result["_id"] or "unknown"
+                count = result["count"]
+                metric_down.add_metric([model], count)
+                logger.debug("Thumbs down for model %s: %s", model, count)
+            yield metric_down
+
+            # Rating ratio per model (percentage of positive ratings)
+            pipeline_ratio = [
+                {
+                    "$match": {
+                        "feedback.rating": {"$in": ["thumbsUp", "thumbsDown"]},
+                        "model": {"$exists": True, "$ne": None}
+                    }
+                },
+                {
+                    "$group": {
+                        "_id": "$model",
+                        "thumbsUp": {
+                            "$sum": {"$cond": [{"$eq": ["$feedback.rating", "thumbsUp"]}, 1, 0]}
+                        },
+                        "total": {"$sum": 1}
+                    }
+                },
+            ]
+            results_ratio = self.messages_collection.aggregate(pipeline_ratio)
+            metric_ratio = GaugeMetricFamily(
+                "librechat_rating_ratio_per_model",
+                "Percentage of positive ratings per model (0-100)",
+                labels=["model"],
+            )
+            for result in results_ratio:
+                model = result["_id"] or "unknown"
+                thumbs_up = result["thumbsUp"]
+                total = result["total"]
+                ratio = (thumbs_up / total * 100) if total > 0 else 0
+                metric_ratio.add_metric([model], ratio)
+                logger.debug("Rating ratio for model %s: %.2f%% (%d/%d)", model, ratio, thumbs_up, total)
+            yield metric_ratio
+
+        except Exception as e:
+            logger.exception("Error collecting rating counts per model: %s", e)
+
+    def collect_rating_counts_per_tag(self):
+        """
+        Collect rating counts per feedback tag.
+        """
+        try:
+            pipeline = [
+                {
+                    "$match": {
+                        "feedback.tag": {"$exists": True, "$ne": None}
+                    }
+                },
+                {"$group": {"_id": "$feedback.tag", "count": {"$sum": 1}}},
+            ]
+            results = self.messages_collection.aggregate(pipeline)
+            metric = GaugeMetricFamily(
+                "librechat_rating_counts_per_tag",
+                "Number of ratings per feedback tag",
+                labels=["tag"],
+            )
+            for result in results:
+                tag = result["_id"] or "unknown"
+                count = result["count"]
+                metric.add_metric([tag], count)
+                logger.debug("Rating count for tag %s: %s", tag, count)
+            yield metric
+        except Exception as e:
+            logger.exception("Error collecting rating counts per tag: %s", e)
+
+    def collect_rating_ratio(self):
+        """
+        Collect overall rating ratio (percentage of positive ratings).
+        """
+        try:
+            pipeline = [
+                {
+                    "$match": {
+                        "feedback.rating": {"$in": ["thumbsUp", "thumbsDown"]}
+                    }
+                },
+                {
+                    "$group": {
+                        "_id": None,
+                        "thumbsUp": {
+                            "$sum": {"$cond": [{"$eq": ["$feedback.rating", "thumbsUp"]}, 1, 0]}
+                        },
+                        "total": {"$sum": 1}
+                    }
+                },
+            ]
+            results = list(self.messages_collection.aggregate(pipeline))
+            if results:
+                thumbs_up = results[0]["thumbsUp"]
+                total = results[0]["total"]
+                ratio = (thumbs_up / total * 100) if total > 0 else 0
+                logger.debug("Overall rating ratio: %.2f%% (%d/%d)", ratio, thumbs_up, total)
+                yield GaugeMetricFamily(
+                    "librechat_overall_rating_ratio",
+                    "Overall percentage of positive ratings (0-100)",
+                    value=ratio,
+                )
+        except Exception as e:
+            logger.exception("Error collecting overall rating ratio: %s", e)
+
+    def collect_rating_counts_5m(self):
+        """
+        Collect rating counts in the last 5 minutes.
+        """
+        try:
+            five_minutes_ago = datetime.now(timezone.utc) - timedelta(minutes=5)
+
+            thumbs_up_5m = self.messages_collection.count_documents({
+                "feedback.rating": "thumbsUp",
+                "updatedAt": {"$gte": five_minutes_ago}
+            })
+            thumbs_down_5m = self.messages_collection.count_documents({
+                "feedback.rating": "thumbsDown",
+                "updatedAt": {"$gte": five_minutes_ago}
+            })
+
+            logger.debug("Thumbs up in last 5 minutes: %s", thumbs_up_5m)
+            logger.debug("Thumbs down in last 5 minutes: %s", thumbs_down_5m)
+
+            yield GaugeMetricFamily(
+                "librechat_thumbs_up_5m",
+                "Number of thumbs up ratings in the last 5 minutes",
+                value=thumbs_up_5m,
+            )
+            yield GaugeMetricFamily(
+                "librechat_thumbs_down_5m",
+                "Number of thumbs down ratings in the last 5 minutes",
+                value=thumbs_down_5m,
+            )
+        except Exception as e:
+            logger.exception("Error collecting rating counts in last 5 minutes: %s", e)
+
+    def collect_rated_message_count(self):
+        """
+        Collect total number of messages that have ratings.
+        """
+        try:
+            rated_count = self.messages_collection.count_documents({
+                "feedback": {"$exists": True, "$ne": None}
+            })
+            logger.debug("Total rated messages: %s", rated_count)
+            yield GaugeMetricFamily(
+                "librechat_rated_messages_total",
+                "Total number of messages that have ratings",
+                value=rated_count,
+            )
+        except Exception as e:
+            logger.exception("Error collecting rated message count: %s", e)
+
+    def collect_model_tag_combinations(self):
+        """
+        Collect rating counts for model and tag combinations.
+        """
+        try:
+            pipeline = [
+                {
+                    "$match": {
+                        "feedback.tag": {"$exists": True, "$ne": None},
+                        "feedback.rating": {"$exists": True, "$ne": None},
+                        "model": {"$exists": True, "$ne": None}
+                    }
+                },
+                {
+                    "$group": {
+                        "_id": {
+                            "model": "$model",
+                            "tag": "$feedback.tag",
+                            "rating": "$feedback.rating"
+                        },
+                        "count": {"$sum": 1}
+                    }
+                },
+            ]
+            results = self.messages_collection.aggregate(pipeline)
+
+            # Separate metrics for thumbs up and thumbs down
+            metric_up = GaugeMetricFamily(
+                "librechat_model_tag_thumbs_up",
+                "Number of thumbs up ratings per model and tag combination",
+                labels=["model", "tag"],
+            )
+            metric_down = GaugeMetricFamily(
+                "librechat_model_tag_thumbs_down",
+                "Number of thumbs down ratings per model and tag combination",
+                labels=["model", "tag"],
+            )
+
+            for result in results:
+                model = result["_id"]["model"] or "unknown"
+                tag = result["_id"]["tag"] or "unknown"
+                rating = result["_id"]["rating"]
+                count = result["count"]
+
+                if rating == "thumbsUp":
+                    metric_up.add_metric([model, tag], count)
+                    logger.debug("Thumbs up for model %s, tag %s: %s", model, tag, count)
+                elif rating == "thumbsDown":
+                    metric_down.add_metric([model, tag], count)
+                    logger.debug("Thumbs down for model %s, tag %s: %s", model, tag, count)
+
+            yield metric_up
+            yield metric_down
+        except Exception as e:
+            logger.exception("Error collecting model tag combinations: %s", e)
 
 
 if __name__ == "__main__":
