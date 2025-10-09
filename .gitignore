@@ -4,3 +4,4 @@ mariadb_data
 grafana_data
 mariadb-dev/init/init.sql
 venv/
+__pycache__/
