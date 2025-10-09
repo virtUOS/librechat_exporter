@@ -830,7 +830,7 @@ class LibreChatMetricsCollector(Collector):
         OPTIMIZED: Uses cached data from _fetch_all_rating_metrics
         """
         try:
-            if not hasattr(self, '_rating_cache'):
+            if not hasattr(self, '_rating_cache') or self._rating_cache is None:
                 self._fetch_all_rating_metrics()
 
             data = self._rating_cache
@@ -859,7 +859,7 @@ class LibreChatMetricsCollector(Collector):
         OPTIMIZED: Uses cached data from _fetch_all_rating_metrics
         """
         try:
-            if not hasattr(self, '_rating_cache') or self._rating_cache is None:
+            if self._rating_cache is None:
                 self._fetch_all_rating_metrics()
 
             data = self._rating_cache['per_model']
@@ -908,7 +908,7 @@ class LibreChatMetricsCollector(Collector):
         OPTIMIZED: Uses cached data from _fetch_all_rating_metrics
         """
         try:
-            if not hasattr(self, '_rating_cache') or self._rating_cache is None:
+            if self._rating_cache is None:
                 self._fetch_all_rating_metrics()
 
             data = self._rating_cache['per_tag']
@@ -933,7 +933,7 @@ class LibreChatMetricsCollector(Collector):
         OPTIMIZED: Uses cached data from _fetch_all_rating_metrics
         """
         try:
-            if not hasattr(self, '_rating_cache') or self._rating_cache is None:
+            if self._rating_cache is None:
                 self._fetch_all_rating_metrics()
 
             thumbs_up = self._rating_cache['total_thumbs_up']
@@ -957,7 +957,7 @@ class LibreChatMetricsCollector(Collector):
         OPTIMIZED: Uses cached data from _fetch_all_rating_metrics
         """
         try:
-            if not hasattr(self, '_rating_cache') or self._rating_cache is None:
+            if self._rating_cache is None:
                 self._fetch_all_rating_metrics()
 
             thumbs_up_5m = self._rating_cache['thumbs_up_5m']
@@ -985,7 +985,7 @@ class LibreChatMetricsCollector(Collector):
         OPTIMIZED: Uses cached data from _fetch_all_rating_metrics
         """
         try:
-            if not hasattr(self, '_rating_cache') or self._rating_cache is None:
+            if self._rating_cache is None:
                 self._fetch_all_rating_metrics()
 
             rated_count = self._rating_cache['rated_count']
@@ -1005,7 +1005,7 @@ class LibreChatMetricsCollector(Collector):
         OPTIMIZED: Uses cached data from _fetch_all_rating_metrics
         """
         try:
-            if not hasattr(self, '_rating_cache') or self._rating_cache is None:
+            if self._rating_cache is None:
                 self._fetch_all_rating_metrics()
 
             data = self._rating_cache['model_tag_combos']
