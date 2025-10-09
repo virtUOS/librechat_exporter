@@ -33,11 +33,15 @@ class LibreChatMetricsCollector(Collector):
         self.client = MongoClient(mongodb_uri)
         self.db = self.client[os.getenv("MONGODB_DATABASE", "LibreChat")]
         self.messages_collection = self.db["messages"]
+        self._rating_cache = None
 
     def collect(self):
         """
         Collect metrics and yield Prometheus metrics.
         """
+        # Clear rating cache at start of each collection
+        self._rating_cache = None
+
         yield from self.collect_message_count()
         yield from self.collect_error_message_count()
         yield from self.collect_input_token_count()
@@ -60,7 +64,7 @@ class LibreChatMetricsCollector(Collector):
         yield from self.collect_token_counts_5m()
         yield from self.collect_error_message_count_5m()
         yield from self.collect_error_count_per_model_5m()
-        # Adding new rating metrics
+        # Adding new rating metrics - OPTIMIZED: Single query fetches all rating data
         yield from self.collect_rating_counts()
         yield from self.collect_rating_counts_per_model()
         yield from self.collect_rating_counts_per_tag()
@@ -644,17 +648,194 @@ class LibreChatMetricsCollector(Collector):
         except Exception as e:
             logger.exception("Error collecting error messages per model in last 5 minutes: %s", e)
 
+    def _fetch_all_rating_metrics(self):
+        """
+        OPTIMIZATION: Fetch all rating metrics in a single MongoDB aggregation query.
+        This reduces database calls from ~10 to 1, significantly improving performance.
+        """
+        try:
+            five_minutes_ago = datetime.now(timezone.utc) - timedelta(minutes=5)
+
+            # Single $facet aggregation to get all rating data at once
+            pipeline = [
+                {
+                    "$facet": {
+                        # Total counts
+                        "total_ratings": [
+                            {"$match": {"feedback.rating": {"$in": ["thumbsUp", "thumbsDown"]}}},
+                            {
+                                "$group": {
+                                    "_id": "$feedback.rating",
+                                    "count": {"$sum": 1}
+                                }
+                            }
+                        ],
+                        # Per-model ratings
+                        "per_model": [
+                            {
+                                "$match": {
+                                    "feedback.rating": {"$in": ["thumbsUp", "thumbsDown"]},
+                                    "model": {"$exists": True, "$ne": None}
+                                }
+                            },
+                            {
+                                "$group": {
+                                    "_id": {"model": "$model", "rating": "$feedback.rating"},
+                                    "count": {"$sum": 1}
+                                }
+                            }
+                        ],
+                        # Per-tag ratings
+                        "per_tag": [
+                            {
+                                "$match": {
+                                    "feedback.tag": {"$exists": True, "$ne": None}
+                                }
+                            },
+                            {
+                                "$group": {
+                                    "_id": "$feedback.tag",
+                                    "count": {"$sum": 1}
+                                }
+                            }
+                        ],
+                        # Model-tag combinations
+                        "model_tag_combos": [
+                            {
+                                "$match": {
+                                    "feedback.tag": {"$exists": True, "$ne": None},
+                                    "feedback.rating": {"$exists": True, "$ne": None},
+                                    "model": {"$exists": True, "$ne": None}
+                                }
+                            },
+                            {
+                                "$group": {
+                                    "_id": {
+                                        "model": "$model",
+                                        "tag": "$feedback.tag",
+                                        "rating": "$feedback.rating"
+                                    },
+                                    "count": {"$sum": 1}
+                                }
+                            }
+                        ],
+                        # 5-minute ratings
+                        "ratings_5m": [
+                            {
+                                "$match": {
+                                    "feedback.rating": {"$in": ["thumbsUp", "thumbsDown"]},
+                                    "updatedAt": {"$gte": five_minutes_ago}
+                                }
+                            },
+                            {
+                                "$group": {
+                                    "_id": "$feedback.rating",
+                                    "count": {"$sum": 1}
+                                }
+                            }
+                        ],
+                        # Total rated messages
+                        "rated_count": [
+                            {
+                                "$match": {
+                                    "feedback": {"$exists": True, "$ne": None}
+                                }
+                            },
+                            {
+                                "$group": {
+                                    "_id": None,
+                                    "count": {"$sum": 1}
+                                }
+                            }
+                        ]
+                    }
+                }
+            ]
+
+            results = list(self.messages_collection.aggregate(pipeline))[0]
+
+            # Process results into cache
+            cache = {
+                'total_thumbs_up': 0,
+                'total_thumbs_down': 0,
+                'per_model': {},
+                'per_tag': {},
+                'model_tag_combos': {},
+                'thumbs_up_5m': 0,
+                'thumbs_down_5m': 0,
+                'rated_count': 0
+            }
+
+            # Total ratings
+            for item in results['total_ratings']:
+                if item['_id'] == 'thumbsUp':
+                    cache['total_thumbs_up'] = item['count']
+                elif item['_id'] == 'thumbsDown':
+                    cache['total_thumbs_down'] = item['count']
+
+            # Per-model ratings
+            for item in results['per_model']:
+                model = item['_id']['model'] or 'unknown'
+                rating = item['_id']['rating']
+                if model not in cache['per_model']:
+                    cache['per_model'][model] = {'thumbsUp': 0, 'thumbsDown': 0, 'total': 0}
+                cache['per_model'][model][rating] = item['count']
+                cache['per_model'][model]['total'] += item['count']
+
+            # Per-tag ratings
+            for item in results['per_tag']:
+                tag = item['_id'] or 'unknown'
+                cache['per_tag'][tag] = item['count']
+
+            # Model-tag combinations
+            for item in results['model_tag_combos']:
+                model = item['_id']['model'] or 'unknown'
+                tag = item['_id']['tag'] or 'unknown'
+                rating = item['_id']['rating']
+                key = (model, tag, rating)
+                cache['model_tag_combos'][key] = item['count']
+
+            # 5-minute ratings
+            for item in results['ratings_5m']:
+                if item['_id'] == 'thumbsUp':
+                    cache['thumbs_up_5m'] = item['count']
+                elif item['_id'] == 'thumbsDown':
+                    cache['thumbs_down_5m'] = item['count']
+
+            # Rated count
+            if results['rated_count']:
+                cache['rated_count'] = results['rated_count'][0]['count']
+
+            self._rating_cache = cache
+            logger.debug("Rating metrics cached: %d models, %d tags, %d combos",
+                         len(cache['per_model']), len(cache['per_tag']), len(cache['model_tag_combos']))
+
+        except Exception as e:
+            logger.exception("Error fetching rating metrics: %s", e)
+            # Initialize empty cache on error
+            self._rating_cache = {
+                'total_thumbs_up': 0,
+                'total_thumbs_down': 0,
+                'per_model': {},
+                'per_tag': {},
+                'model_tag_combos': {},
+                'thumbs_up_5m': 0,
+                'thumbs_down_5m': 0,
+                'rated_count': 0
+            }
+
     def collect_rating_counts(self):
         """
         Collect total number of thumbs up and thumbs down ratings.
+        OPTIMIZED: Uses cached data from _fetch_all_rating_metrics
         """
         try:
-            thumbs_up_count = self.messages_collection.count_documents({
-                "feedback.rating": "thumbsUp"
-            })
-            thumbs_down_count = self.messages_collection.count_documents({
-                "feedback.rating": "thumbsDown"
-            })
+            if not hasattr(self, '_rating_cache'):
+                self._fetch_all_rating_metrics()
+
+            data = self._rating_cache
+            thumbs_up_count = data['total_thumbs_up']
+            thumbs_down_count = data['total_thumbs_down']
 
             logger.debug("Total thumbs up: %s", thumbs_up_count)
             logger.debug("Total thumbs down: %s", thumbs_down_count)
@@ -675,85 +856,47 @@ class LibreChatMetricsCollector(Collector):
     def collect_rating_counts_per_model(self):
         """
         Collect rating counts per model.
+        OPTIMIZED: Uses cached data from _fetch_all_rating_metrics
         """
         try:
-            # Thumbs up per model
-            pipeline_up = [
-                {
-                    "$match": {
-                        "feedback.rating": "thumbsUp",
-                        "model": {"$exists": True, "$ne": None}
-                    }
-                },
-                {"$group": {"_id": "$model", "count": {"$sum": 1}}},
-            ]
-            results_up = self.messages_collection.aggregate(pipeline_up)
+            if not hasattr(self, '_rating_cache') or self._rating_cache is None:
+                self._fetch_all_rating_metrics()
+
+            data = self._rating_cache['per_model']
+
             metric_up = GaugeMetricFamily(
                 "librechat_thumbs_up_per_model",
                 "Number of thumbs up ratings per model",
                 labels=["model"],
             )
-            for result in results_up:
-                model = result["_id"] or "unknown"
-                count = result["count"]
-                metric_up.add_metric([model], count)
-                logger.debug("Thumbs up for model %s: %s", model, count)
-            yield metric_up
-
-            # Thumbs down per model
-            pipeline_down = [
-                {
-                    "$match": {
-                        "feedback.rating": "thumbsDown",
-                        "model": {"$exists": True, "$ne": None}
-                    }
-                },
-                {"$group": {"_id": "$model", "count": {"$sum": 1}}},
-            ]
-            results_down = self.messages_collection.aggregate(pipeline_down)
             metric_down = GaugeMetricFamily(
                 "librechat_thumbs_down_per_model",
                 "Number of thumbs down ratings per model",
                 labels=["model"],
             )
-            for result in results_down:
-                model = result["_id"] or "unknown"
-                count = result["count"]
-                metric_down.add_metric([model], count)
-                logger.debug("Thumbs down for model %s: %s", model, count)
-            yield metric_down
-
-            # Rating ratio per model (percentage of positive ratings)
-            pipeline_ratio = [
-                {
-                    "$match": {
-                        "feedback.rating": {"$in": ["thumbsUp", "thumbsDown"]},
-                        "model": {"$exists": True, "$ne": None}
-                    }
-                },
-                {
-                    "$group": {
-                        "_id": "$model",
-                        "thumbsUp": {
-                            "$sum": {"$cond": [{"$eq": ["$feedback.rating", "thumbsUp"]}, 1, 0]}
-                        },
-                        "total": {"$sum": 1}
-                    }
-                },
-            ]
-            results_ratio = self.messages_collection.aggregate(pipeline_ratio)
             metric_ratio = GaugeMetricFamily(
                 "librechat_rating_ratio_per_model",
                 "Percentage of positive ratings per model (0-100)",
                 labels=["model"],
             )
-            for result in results_ratio:
-                model = result["_id"] or "unknown"
-                thumbs_up = result["thumbsUp"]
-                total = result["total"]
+
+            for model, counts in data.items():
+                thumbs_up = counts.get('thumbsUp', 0)
+                thumbs_down = counts.get('thumbsDown', 0)
+                total = counts.get('total', 0)
+
+                metric_up.add_metric([model], thumbs_up)
+                metric_down.add_metric([model], thumbs_down)
+
                 ratio = (thumbs_up / total * 100) if total > 0 else 0
                 metric_ratio.add_metric([model], ratio)
+
+                logger.debug("Thumbs up for model %s: %s", model, thumbs_up)
+                logger.debug("Thumbs down for model %s: %s", model, thumbs_down)
                 logger.debug("Rating ratio for model %s: %.2f%% (%d/%d)", model, ratio, thumbs_up, total)
+
+            yield metric_up
+            yield metric_down
             yield metric_ratio
 
         except Exception as e:
@@ -762,27 +905,24 @@ class LibreChatMetricsCollector(Collector):
     def collect_rating_counts_per_tag(self):
         """
         Collect rating counts per feedback tag.
+        OPTIMIZED: Uses cached data from _fetch_all_rating_metrics
         """
         try:
-            pipeline = [
-                {
-                    "$match": {
-                        "feedback.tag": {"$exists": True, "$ne": None}
-                    }
-                },
-                {"$group": {"_id": "$feedback.tag", "count": {"$sum": 1}}},
-            ]
-            results = self.messages_collection.aggregate(pipeline)
+            if not hasattr(self, '_rating_cache') or self._rating_cache is None:
+                self._fetch_all_rating_metrics()
+
+            data = self._rating_cache['per_tag']
+
             metric = GaugeMetricFamily(
                 "librechat_rating_counts_per_tag",
                 "Number of ratings per feedback tag",
                 labels=["tag"],
             )
-            for result in results:
-                tag = result["_id"] or "unknown"
-                count = result["count"]
+
+            for tag, count in data.items():
                 metric.add_metric([tag], count)
                 logger.debug("Rating count for tag %s: %s", tag, count)
+
             yield metric
         except Exception as e:
             logger.exception("Error collecting rating counts per tag: %s", e)
@@ -790,53 +930,38 @@ class LibreChatMetricsCollector(Collector):
     def collect_rating_ratio(self):
         """
         Collect overall rating ratio (percentage of positive ratings).
+        OPTIMIZED: Uses cached data from _fetch_all_rating_metrics
         """
         try:
-            pipeline = [
-                {
-                    "$match": {
-                        "feedback.rating": {"$in": ["thumbsUp", "thumbsDown"]}
-                    }
-                },
-                {
-                    "$group": {
-                        "_id": None,
-                        "thumbsUp": {
-                            "$sum": {"$cond": [{"$eq": ["$feedback.rating", "thumbsUp"]}, 1, 0]}
-                        },
-                        "total": {"$sum": 1}
-                    }
-                },
-            ]
-            results = list(self.messages_collection.aggregate(pipeline))
-            if results:
-                thumbs_up = results[0]["thumbsUp"]
-                total = results[0]["total"]
-                ratio = (thumbs_up / total * 100) if total > 0 else 0
-                logger.debug("Overall rating ratio: %.2f%% (%d/%d)", ratio, thumbs_up, total)
-                yield GaugeMetricFamily(
-                    "librechat_overall_rating_ratio",
-                    "Overall percentage of positive ratings (0-100)",
-                    value=ratio,
-                )
+            if not hasattr(self, '_rating_cache') or self._rating_cache is None:
+                self._fetch_all_rating_metrics()
+
+            thumbs_up = self._rating_cache['total_thumbs_up']
+            thumbs_down = self._rating_cache['total_thumbs_down']
+            total = thumbs_up + thumbs_down
+
+            ratio = (thumbs_up / total * 100) if total > 0 else 0
+            logger.debug("Overall rating ratio: %.2f%% (%d/%d)", ratio, thumbs_up, total)
+
+            yield GaugeMetricFamily(
+                "librechat_overall_rating_ratio",
+                "Overall percentage of positive ratings (0-100)",
+                value=ratio,
+            )
         except Exception as e:
             logger.exception("Error collecting overall rating ratio: %s", e)
 
     def collect_rating_counts_5m(self):
         """
         Collect rating counts in the last 5 minutes.
+        OPTIMIZED: Uses cached data from _fetch_all_rating_metrics
         """
         try:
-            five_minutes_ago = datetime.now(timezone.utc) - timedelta(minutes=5)
+            if not hasattr(self, '_rating_cache') or self._rating_cache is None:
+                self._fetch_all_rating_metrics()
 
-            thumbs_up_5m = self.messages_collection.count_documents({
-                "feedback.rating": "thumbsUp",
-                "updatedAt": {"$gte": five_minutes_ago}
-            })
-            thumbs_down_5m = self.messages_collection.count_documents({
-                "feedback.rating": "thumbsDown",
-                "updatedAt": {"$gte": five_minutes_ago}
-            })
+            thumbs_up_5m = self._rating_cache['thumbs_up_5m']
+            thumbs_down_5m = self._rating_cache['thumbs_down_5m']
 
             logger.debug("Thumbs up in last 5 minutes: %s", thumbs_up_5m)
             logger.debug("Thumbs down in last 5 minutes: %s", thumbs_down_5m)
@@ -857,12 +982,15 @@ class LibreChatMetricsCollector(Collector):
     def collect_rated_message_count(self):
         """
         Collect total number of messages that have ratings.
+        OPTIMIZED: Uses cached data from _fetch_all_rating_metrics
         """
         try:
-            rated_count = self.messages_collection.count_documents({
-                "feedback": {"$exists": True, "$ne": None}
-            })
+            if not hasattr(self, '_rating_cache') or self._rating_cache is None:
+                self._fetch_all_rating_metrics()
+
+            rated_count = self._rating_cache['rated_count']
             logger.debug("Total rated messages: %s", rated_count)
+
             yield GaugeMetricFamily(
                 "librechat_rated_messages_total",
                 "Total number of messages that have ratings",
@@ -874,28 +1002,13 @@ class LibreChatMetricsCollector(Collector):
     def collect_model_tag_combinations(self):
         """
         Collect rating counts for model and tag combinations.
+        OPTIMIZED: Uses cached data from _fetch_all_rating_metrics
         """
         try:
-            pipeline = [
-                {
-                    "$match": {
-                        "feedback.tag": {"$exists": True, "$ne": None},
-                        "feedback.rating": {"$exists": True, "$ne": None},
-                        "model": {"$exists": True, "$ne": None}
-                    }
-                },
-                {
-                    "$group": {
-                        "_id": {
-                            "model": "$model",
-                            "tag": "$feedback.tag",
-                            "rating": "$feedback.rating"
-                        },
-                        "count": {"$sum": 1}
-                    }
-                },
-            ]
-            results = self.messages_collection.aggregate(pipeline)
+            if not hasattr(self, '_rating_cache') or self._rating_cache is None:
+                self._fetch_all_rating_metrics()
+
+            data = self._rating_cache['model_tag_combos']
 
             # Separate metrics for thumbs up and thumbs down
             metric_up = GaugeMetricFamily(
@@ -909,12 +1022,7 @@ class LibreChatMetricsCollector(Collector):
                 labels=["model", "tag"],
             )
 
-            for result in results:
-                model = result["_id"]["model"] or "unknown"
-                tag = result["_id"]["tag"] or "unknown"
-                rating = result["_id"]["rating"]
-                count = result["count"]
-
+            for (model, tag, rating), count in data.items():
                 if rating == "thumbsUp":
                     metric_up.add_metric([model, tag], count)
                     logger.debug("Thumbs up for model %s, tag %s: %s", model, tag, count)
