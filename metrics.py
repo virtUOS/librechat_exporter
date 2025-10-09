@@ -41,7 +41,7 @@ class LibreChatMetricsCollector(Collector):
         """
         # Clear rating cache at start of each collection
         self._rating_cache = None
-        
+
         yield from self.collect_message_count()
         yield from self.collect_error_message_count()
         yield from self.collect_input_token_count()
@@ -655,7 +655,7 @@ class LibreChatMetricsCollector(Collector):
         """
         try:
             five_minutes_ago = datetime.now(timezone.utc) - timedelta(minutes=5)
-            
+
             # Single $facet aggregation to get all rating data at once
             pipeline = [
                 {
@@ -751,9 +751,9 @@ class LibreChatMetricsCollector(Collector):
                     }
                 }
             ]
-            
+
             results = list(self.messages_collection.aggregate(pipeline))[0]
-            
+
             # Process results into cache
             cache = {
                 'total_thumbs_up': 0,
@@ -765,14 +765,14 @@ class LibreChatMetricsCollector(Collector):
                 'thumbs_down_5m': 0,
                 'rated_count': 0
             }
-            
+
             # Total ratings
             for item in results['total_ratings']:
                 if item['_id'] == 'thumbsUp':
                     cache['total_thumbs_up'] = item['count']
                 elif item['_id'] == 'thumbsDown':
                     cache['total_thumbs_down'] = item['count']
-            
+
             # Per-model ratings
             for item in results['per_model']:
                 model = item['_id']['model'] or 'unknown'
@@ -781,12 +781,12 @@ class LibreChatMetricsCollector(Collector):
                     cache['per_model'][model] = {'thumbsUp': 0, 'thumbsDown': 0, 'total': 0}
                 cache['per_model'][model][rating] = item['count']
                 cache['per_model'][model]['total'] += item['count']
-            
+
             # Per-tag ratings
             for item in results['per_tag']:
                 tag = item['_id'] or 'unknown'
                 cache['per_tag'][tag] = item['count']
-            
+
             # Model-tag combinations
             for item in results['model_tag_combos']:
                 model = item['_id']['model'] or 'unknown'
@@ -794,22 +794,22 @@ class LibreChatMetricsCollector(Collector):
                 rating = item['_id']['rating']
                 key = (model, tag, rating)
                 cache['model_tag_combos'][key] = item['count']
-            
+
             # 5-minute ratings
             for item in results['ratings_5m']:
                 if item['_id'] == 'thumbsUp':
                     cache['thumbs_up_5m'] = item['count']
                 elif item['_id'] == 'thumbsDown':
                     cache['thumbs_down_5m'] = item['count']
-            
+
             # Rated count
             if results['rated_count']:
                 cache['rated_count'] = results['rated_count'][0]['count']
-            
+
             self._rating_cache = cache
             logger.debug("Rating metrics cached: %d models, %d tags, %d combos",
-                        len(cache['per_model']), len(cache['per_tag']), len(cache['model_tag_combos']))
-            
+                         len(cache['per_model']), len(cache['per_tag']), len(cache['model_tag_combos']))
+
         except Exception as e:
             logger.exception("Error fetching rating metrics: %s", e)
             # Initialize empty cache on error
@@ -832,7 +832,7 @@ class LibreChatMetricsCollector(Collector):
         try:
             if not hasattr(self, '_rating_cache'):
                 self._fetch_all_rating_metrics()
-            
+
             data = self._rating_cache
             thumbs_up_count = data['total_thumbs_up']
             thumbs_down_count = data['total_thumbs_down']
@@ -861,9 +861,9 @@ class LibreChatMetricsCollector(Collector):
         try:
             if not hasattr(self, '_rating_cache') or self._rating_cache is None:
                 self._fetch_all_rating_metrics()
-            
+
             data = self._rating_cache['per_model']
-            
+
             metric_up = GaugeMetricFamily(
                 "librechat_thumbs_up_per_model",
                 "Number of thumbs up ratings per model",
@@ -879,22 +879,22 @@ class LibreChatMetricsCollector(Collector):
                 "Percentage of positive ratings per model (0-100)",
                 labels=["model"],
             )
-            
+
             for model, counts in data.items():
                 thumbs_up = counts.get('thumbsUp', 0)
                 thumbs_down = counts.get('thumbsDown', 0)
                 total = counts.get('total', 0)
-                
+
                 metric_up.add_metric([model], thumbs_up)
                 metric_down.add_metric([model], thumbs_down)
-                
+
                 ratio = (thumbs_up / total * 100) if total > 0 else 0
                 metric_ratio.add_metric([model], ratio)
-                
+
                 logger.debug("Thumbs up for model %s: %s", model, thumbs_up)
                 logger.debug("Thumbs down for model %s: %s", model, thumbs_down)
                 logger.debug("Rating ratio for model %s: %.2f%% (%d/%d)", model, ratio, thumbs_up, total)
-            
+
             yield metric_up
             yield metric_down
             yield metric_ratio
@@ -910,19 +910,19 @@ class LibreChatMetricsCollector(Collector):
         try:
             if not hasattr(self, '_rating_cache') or self._rating_cache is None:
                 self._fetch_all_rating_metrics()
-            
+
             data = self._rating_cache['per_tag']
-            
+
             metric = GaugeMetricFamily(
                 "librechat_rating_counts_per_tag",
                 "Number of ratings per feedback tag",
                 labels=["tag"],
             )
-            
+
             for tag, count in data.items():
                 metric.add_metric([tag], count)
                 logger.debug("Rating count for tag %s: %s", tag, count)
-            
+
             yield metric
         except Exception as e:
             logger.exception("Error collecting rating counts per tag: %s", e)
@@ -935,14 +935,14 @@ class LibreChatMetricsCollector(Collector):
         try:
             if not hasattr(self, '_rating_cache') or self._rating_cache is None:
                 self._fetch_all_rating_metrics()
-            
+
             thumbs_up = self._rating_cache['total_thumbs_up']
             thumbs_down = self._rating_cache['total_thumbs_down']
             total = thumbs_up + thumbs_down
-            
+
             ratio = (thumbs_up / total * 100) if total > 0 else 0
             logger.debug("Overall rating ratio: %.2f%% (%d/%d)", ratio, thumbs_up, total)
-            
+
             yield GaugeMetricFamily(
                 "librechat_overall_rating_ratio",
                 "Overall percentage of positive ratings (0-100)",
@@ -959,7 +959,7 @@ class LibreChatMetricsCollector(Collector):
         try:
             if not hasattr(self, '_rating_cache') or self._rating_cache is None:
                 self._fetch_all_rating_metrics()
-            
+
             thumbs_up_5m = self._rating_cache['thumbs_up_5m']
             thumbs_down_5m = self._rating_cache['thumbs_down_5m']
 
@@ -987,10 +987,10 @@ class LibreChatMetricsCollector(Collector):
         try:
             if not hasattr(self, '_rating_cache') or self._rating_cache is None:
                 self._fetch_all_rating_metrics()
-            
+
             rated_count = self._rating_cache['rated_count']
             logger.debug("Total rated messages: %s", rated_count)
-            
+
             yield GaugeMetricFamily(
                 "librechat_rated_messages_total",
                 "Total number of messages that have ratings",
@@ -1007,9 +1007,9 @@ class LibreChatMetricsCollector(Collector):
         try:
             if not hasattr(self, '_rating_cache') or self._rating_cache is None:
                 self._fetch_all_rating_metrics()
-            
+
             data = self._rating_cache['model_tag_combos']
-            
+
             # Separate metrics for thumbs up and thumbs down
             metric_up = GaugeMetricFamily(
                 "librechat_model_tag_thumbs_up",
