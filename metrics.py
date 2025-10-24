@@ -1464,7 +1464,10 @@ class LibreChatMetricsCollector(Collector):
                 errors = errors_per_tool.get(tool, 0)
                 success_rate = ((total_calls - errors) / total_calls * 100) if total_calls > 0 else 100
                 metric.add_metric([tool], success_rate)
-                logger.debug("Success rate for %s: %.2f%% (%d/%d)", tool, success_rate, total_calls - errors, total_calls)
+                logger.debug(
+                    "Success rate for %s: %.2f%% (%d/%d)",
+                    tool, success_rate, total_calls - errors, total_calls
+                )
 
             yield metric
         except Exception as e:
