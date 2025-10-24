@@ -35,7 +35,7 @@ class LibreChatMetricsCollector(Collector):
         self.messages_collection = self.db["messages"]
         self._rating_cache = None
         self._tool_cache = None
-        
+
         # Metric group configurations - allow users to disable expensive metric groups
         # All metrics are enabled by default for backward compatibility
         self.enable_basic_metrics = os.getenv("ENABLE_BASIC_METRICS", "true").lower() == "true"
@@ -46,7 +46,7 @@ class LibreChatMetricsCollector(Collector):
         self.enable_rating_metrics = os.getenv("ENABLE_RATING_METRICS", "true").lower() == "true"
         self.enable_tool_metrics = os.getenv("ENABLE_TOOL_METRICS", "true").lower() == "true"
         self.enable_file_metrics = os.getenv("ENABLE_FILE_METRICS", "true").lower() == "true"
-        
+
         logger.info("Metric groups configuration:")
         logger.info("  Basic metrics: %s", self.enable_basic_metrics)
         logger.info("  Token metrics: %s", self.enable_token_metrics)
@@ -70,12 +70,12 @@ class LibreChatMetricsCollector(Collector):
             yield from self.collect_message_count()
             yield from self.collect_error_message_count()
             yield from self.collect_conversation_count()
-        
+
         # Token metrics - input/output token tracking
         if self.enable_token_metrics:
             yield from self.collect_input_token_count()
             yield from self.collect_output_token_count()
-        
+
         # User metrics - user counts and activity
         if self.enable_user_metrics:
             yield from self.collect_active_user_count()
@@ -84,7 +84,7 @@ class LibreChatMetricsCollector(Collector):
             yield from self.collect_daily_unique_users()
             yield from self.collect_weekly_unique_users()
             yield from self.collect_monthly_unique_users()
-        
+
         # Model-specific metrics - per-model breakdowns
         if self.enable_model_metrics:
             yield from self.collect_message_count_per_model()
@@ -92,7 +92,7 @@ class LibreChatMetricsCollector(Collector):
             if self.enable_token_metrics:  # Only if token metrics are also enabled
                 yield from self.collect_input_token_count_per_model()
                 yield from self.collect_output_token_count_per_model()
-        
+
         # Time window metrics - 5-minute activity windows
         if self.enable_time_window_metrics:
             yield from self.collect_messages_5m()
@@ -103,7 +103,7 @@ class LibreChatMetricsCollector(Collector):
                 yield from self.collect_token_counts_5m()
             if self.enable_basic_metrics:
                 yield from self.collect_error_message_count_5m()
-        
+
         # Rating metrics - user feedback and ratings
         if self.enable_rating_metrics:
             yield from self.collect_rating_counts()
@@ -114,7 +114,7 @@ class LibreChatMetricsCollector(Collector):
             yield from self.collect_model_tag_combinations()
             if self.enable_time_window_metrics:
                 yield from self.collect_rating_counts_5m()
-        
+
         # Tool usage metrics - tool calls and statistics
         if self.enable_tool_metrics:
             yield from self.collect_tool_calls_total()
@@ -131,7 +131,7 @@ class LibreChatMetricsCollector(Collector):
                 yield from self.collect_tool_call_errors_5m()
             if self.enable_user_metrics:
                 yield from self.collect_active_tool_users()
-        
+
         # File metrics - uploaded files
         if self.enable_file_metrics:
             yield from self.collect_uploaded_file_count()
