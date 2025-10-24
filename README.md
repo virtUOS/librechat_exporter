@@ -85,6 +85,59 @@ LOGGING_FORMAT="%(asctime)s - %(levelname)s - %(message)s"
 
 # Specify Mongo Database - Optional. Defaults to "LibreChat"
 MONGODB_DATABASE=librechat
+
+# ===== Metric Group Toggles =====
+# Enable/disable specific metric groups to optimize performance
+# All metrics are enabled by default. Set to "false" to disable a group.
+
+# Basic metrics: message counts, error counts, conversation counts
+ENABLE_BASIC_METRICS=true
+
+# Token metrics: input/output token tracking (can be expensive for large databases)
+ENABLE_TOKEN_METRICS=true
+
+# User metrics: active users, registered users, daily/weekly/monthly unique users
+ENABLE_USER_METRICS=true
+
+# Model metrics: per-model message counts, tokens, and errors (can be expensive)
+ENABLE_MODEL_METRICS=true
+
+# Time window metrics: 5-minute activity windows (can be expensive for large databases)
+ENABLE_TIME_WINDOW_METRICS=true
+
+# Rating metrics: user feedback, thumbs up/down, rating tags (can be expensive)
+ENABLE_RATING_METRICS=true
+
+# Tool metrics: tool usage statistics and success rates (can be expensive)
+ENABLE_TOOL_METRICS=true
+
+# File metrics: uploaded file counts
+ENABLE_FILE_METRICS=true
+```
+
+#### Performance Optimization for Large Databases
+
+For large LibreChat databases, some metric groups can cause slow scraping times. You can disable expensive metric groups to improve performance:
+
+**Most expensive metrics** (consider disabling these first):
+- `ENABLE_RATING_METRICS=false` - Rating aggregations can be slow with many rated messages
+- `ENABLE_TOOL_METRICS=false` - Tool usage aggregations can be slow with many tool calls
+- `ENABLE_TIME_WINDOW_METRICS=false` - 5-minute window queries scan recent data frequently
+
+**Moderately expensive metrics**:
+- `ENABLE_TOKEN_METRICS=false` - Token aggregations can be slow with many messages
+- `ENABLE_MODEL_METRICS=false` - Per-model breakdowns require additional grouping
+
+**Example configuration for large databases** (keeps only essential metrics):
+```sh
+ENABLE_BASIC_METRICS=true          # Keep basic message/conversation counts
+ENABLE_TOKEN_METRICS=true          # Keep token tracking for cost analysis
+ENABLE_USER_METRICS=true           # Keep user activity metrics
+ENABLE_MODEL_METRICS=false         # Disable per-model breakdowns
+ENABLE_TIME_WINDOW_METRICS=false   # Disable 5-minute windows
+ENABLE_RATING_METRICS=false        # Disable rating metrics
+ENABLE_TOOL_METRICS=false          # Disable tool metrics
+ENABLE_FILE_METRICS=true           # Keep file counts
 ```
 
 ### 4. Run the Script
