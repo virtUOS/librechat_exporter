@@ -36,6 +36,27 @@ class LibreChatMetricsCollector(Collector):
         self._rating_cache = None
         self._tool_cache = None
 
+        # Metric group configurations - allow users to disable expensive metric groups
+        # All metrics are enabled by default for backward compatibility
+        self.enable_basic_metrics = os.getenv("ENABLE_BASIC_METRICS", "true").lower() == "true"
+        self.enable_token_metrics = os.getenv("ENABLE_TOKEN_METRICS", "true").lower() == "true"
+        self.enable_user_metrics = os.getenv("ENABLE_USER_METRICS", "true").lower() == "true"
+        self.enable_model_metrics = os.getenv("ENABLE_MODEL_METRICS", "true").lower() == "true"
+        self.enable_time_window_metrics = os.getenv("ENABLE_TIME_WINDOW_METRICS", "true").lower() == "true"
+        self.enable_rating_metrics = os.getenv("ENABLE_RATING_METRICS", "true").lower() == "true"
+        self.enable_tool_metrics = os.getenv("ENABLE_TOOL_METRICS", "true").lower() == "true"
+        self.enable_file_metrics = os.getenv("ENABLE_FILE_METRICS", "true").lower() == "true"
+
+        logger.info("Metric groups configuration:")
+        logger.info("  Basic metrics: %s", self.enable_basic_metrics)
+        logger.info("  Token metrics: %s", self.enable_token_metrics)
+        logger.info("  User metrics: %s", self.enable_user_metrics)
+        logger.info("  Model metrics: %s", self.enable_model_metrics)
+        logger.info("  Time window metrics (5m): %s", self.enable_time_window_metrics)
+        logger.info("  Rating metrics: %s", self.enable_rating_metrics)
+        logger.info("  Tool metrics: %s", self.enable_tool_metrics)
+        logger.info("  File metrics: %s", self.enable_file_metrics)
+
     def collect(self):
         """
         Collect metrics and yield Prometheus metrics.
@@ -44,49 +65,76 @@ class LibreChatMetricsCollector(Collector):
         self._rating_cache = None
         self._tool_cache = None
 
-        yield from self.collect_message_count()
-        yield from self.collect_error_message_count()
-        yield from self.collect_input_token_count()
-        yield from self.collect_output_token_count()
-        yield from self.collect_conversation_count()
-        yield from self.collect_message_count_per_model()
-        yield from self.collect_error_count_per_model()
-        yield from self.collect_input_token_count_per_model()
-        yield from self.collect_output_token_count_per_model()
-        yield from self.collect_active_user_count()
-        yield from self.collect_active_conversation_count()
-        yield from self.collect_uploaded_file_count()
-        yield from self.collect_registered_user_count()
-        # Adding new time-based metrics
-        yield from self.collect_daily_unique_users()
-        yield from self.collect_weekly_unique_users()
-        yield from self.collect_monthly_unique_users()
-        yield from self.collect_messages_5m()
-        yield from self.collect_messages_per_model_5m()
-        yield from self.collect_token_counts_5m()
-        yield from self.collect_error_message_count_5m()
-        yield from self.collect_error_count_per_model_5m()
-        # Adding new rating metrics - OPTIMIZED: Single query fetches all rating data
-        yield from self.collect_rating_counts()
-        yield from self.collect_rating_counts_per_model()
-        yield from self.collect_rating_counts_per_tag()
-        yield from self.collect_rating_ratio()
-        yield from self.collect_rating_counts_5m()
-        yield from self.collect_rated_message_count()
-        yield from self.collect_model_tag_combinations()
-        # Adding new tool usage metrics - OPTIMIZED: Single query fetches all tool data
-        yield from self.collect_tool_calls_total()
-        yield from self.collect_tool_calls_per_tool()
-        yield from self.collect_tool_calls_per_model()
-        yield from self.collect_tool_calls_per_endpoint()
-        yield from self.collect_tool_call_errors_total()
-        yield from self.collect_tool_call_errors_per_tool()
-        yield from self.collect_tool_success_rate_per_tool()
-        yield from self.collect_tool_calls_5m()
-        yield from self.collect_tool_calls_per_tool_5m()
-        yield from self.collect_tool_call_errors_5m()
-        yield from self.collect_messages_with_tools()
-        yield from self.collect_active_tool_users()
+        # Basic metrics - message and conversation counts
+        if self.enable_basic_metrics:
+            yield from self.collect_message_count()
+            yield from self.collect_error_message_count()
+            yield from self.collect_conversation_count()
+
+        # Token metrics - input/output token tracking
+        if self.enable_token_metrics:
+            yield from self.collect_input_token_count()
+            yield from self.collect_output_token_count()
+
+        # User metrics - user counts and activity
+        if self.enable_user_metrics:
+            yield from self.collect_active_user_count()
+            yield from self.collect_active_conversation_count()
+            yield from self.collect_registered_user_count()
+            yield from self.collect_daily_unique_users()
+            yield from self.collect_weekly_unique_users()
+            yield from self.collect_monthly_unique_users()
+
+        # Model-specific metrics - per-model breakdowns
+        if self.enable_model_metrics:
+            yield from self.collect_message_count_per_model()
+            yield from self.collect_error_count_per_model()
+            if self.enable_token_metrics:  # Only if token metrics are also enabled
+                yield from self.collect_input_token_count_per_model()
+                yield from self.collect_output_token_count_per_model()
+
+        # Time window metrics - 5-minute activity windows
+        if self.enable_time_window_metrics:
+            yield from self.collect_messages_5m()
+            if self.enable_model_metrics:
+                yield from self.collect_messages_per_model_5m()
+                yield from self.collect_error_count_per_model_5m()
+            if self.enable_token_metrics:
+                yield from self.collect_token_counts_5m()
+            if self.enable_basic_metrics:
+                yield from self.collect_error_message_count_5m()
+
+        # Rating metrics - user feedback and ratings
+        if self.enable_rating_metrics:
+            yield from self.collect_rating_counts()
+            yield from self.collect_rating_counts_per_model()
+            yield from self.collect_rating_counts_per_tag()
+            yield from self.collect_rating_ratio()
+            yield from self.collect_rated_message_count()
+            yield from self.collect_model_tag_combinations()
+            if self.enable_time_window_metrics:
+                yield from self.collect_rating_counts_5m()
+
+        # Tool usage metrics - tool calls and statistics
+        if self.enable_tool_metrics:
+            yield from self.collect_tool_calls_total()
+            yield from self.collect_tool_calls_per_tool()
+            yield from self.collect_tool_calls_per_model()
+            yield from self.collect_tool_calls_per_endpoint()
+            yield from self.collect_tool_call_errors_total()
+            yield from self.collect_tool_call_errors_per_tool()
+            yield from self.collect_tool_success_rate_per_tool()
+            yield from self.collect_messages_with_tools()
+            if self.enable_time_window_metrics:
+                yield from self.collect_tool_calls_5m()
+                yield from self.collect_tool_calls_per_tool_5m()
+                yield from self.collect_tool_call_errors_5m()
+            if self.enable_user_metrics:
+                yield from self.collect_active_tool_users()
+
+        # File metrics - uploaded files
+        if self.enable_file_metrics:
+            yield from self.collect_uploaded_file_count()
 
     def collect_message_count(self):
         """
