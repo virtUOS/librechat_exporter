@@ -18,12 +18,19 @@ The script connects to the MongoDB database used by LibreChat, aggregates releva
   - **Error tracking per model**
   - **Active users and conversations**
   - **Chat rating metrics** (thumbs up/down, feedback tags, model performance)
+  - **Tool usage metrics** (tool calls, success rates, per-model/endpoint breakdown)
   - **Real-time activity monitoring** (5-minute windows)
 - **Chat Rating Analytics**:
   - Track user satisfaction with thumbs up/down ratings
   - Analyze model performance and quality feedback
   - Monitor rating trends and feedback reasons
   - Compare model ratings and user preferences
+- **Tool Usage Analytics**:
+  - Track tool/plugin usage across your LibreChat instance
+  - Monitor tool success and failure rates
+  - Analyze which models use which tools
+  - Identify popular tools and usage patterns
+  - Real-time tool activity monitoring
 - Exposes metrics for Prometheus to scrape
 - Designed to run continuously, collecting metrics at regular intervals
 - Full backward compatibility with older LibreChat versions
@@ -270,6 +277,64 @@ librechat_model_tag_thumbs_up{model="claude-3",tag="creative"} 3.0
 # HELP librechat_model_tag_thumbs_down Number of thumbs down ratings per model and tag combination
 # TYPE librechat_model_tag_thumbs_down gauge
 librechat_model_tag_thumbs_down{model="gpt-4",tag="unhelpful"} 1.0
+# HELP librechat_tool_calls_total Total number of tool calls made
+# TYPE librechat_tool_calls_total gauge
+librechat_tool_calls_total 240.0
+
+# HELP librechat_tool_calls_per_tool Number of calls per tool type
+# TYPE librechat_tool_calls_per_tool gauge
+librechat_tool_calls_per_tool{tool_name="web_search"} 193.0
+librechat_tool_calls_per_tool{tool_name="file_search"} 43.0
+librechat_tool_calls_per_tool{tool_name="code_interpreter"} 15.0
+
+# HELP librechat_tool_calls_per_model Number of tool calls per model and tool combination
+# TYPE librechat_tool_calls_per_model gauge
+librechat_tool_calls_per_model{model="gpt-4",tool_name="web_search"} 120.0
+librechat_tool_calls_per_model{model="gpt-4",tool_name="code_interpreter"} 15.0
+librechat_tool_calls_per_model{model="claude-3",tool_name="web_search"} 73.0
+librechat_tool_calls_per_model{model="gpt-4",tool_name="file_search"} 43.0
+
+# HELP librechat_tool_calls_per_endpoint Number of tool calls per endpoint and tool combination
+# TYPE librechat_tool_calls_per_endpoint gauge
+librechat_tool_calls_per_endpoint{endpoint="openAI",tool_name="web_search"} 147.0
+librechat_tool_calls_per_endpoint{endpoint="openAI",tool_name="file_search"} 37.0
+librechat_tool_calls_per_endpoint{endpoint="agents",tool_name="file_search"} 4.0
+
+# HELP librechat_tool_call_errors_total Total number of failed tool calls
+# TYPE librechat_tool_call_errors_total counter
+librechat_tool_call_errors_total 12.0
+
+# HELP librechat_tool_call_errors_per_tool_total Number of failed tool calls per tool
+# TYPE librechat_tool_call_errors_per_tool_total counter
+librechat_tool_call_errors_per_tool_total{tool_name="web_search"} 10.0
+librechat_tool_call_errors_per_tool_total{tool_name="code_interpreter"} 2.0
+
+# HELP librechat_tool_success_rate_per_tool Success rate percentage per tool (0-100)
+# TYPE librechat_tool_success_rate_per_tool gauge
+librechat_tool_success_rate_per_tool{tool_name="web_search"} 94.8
+librechat_tool_success_rate_per_tool{tool_name="file_search"} 100.0
+librechat_tool_success_rate_per_tool{tool_name="code_interpreter"} 86.7
+
+# HELP librechat_tool_calls_5m Number of tool calls in the last 5 minutes
+# TYPE librechat_tool_calls_5m gauge
+librechat_tool_calls_5m 5.0
+
+# HELP librechat_tool_calls_per_tool_5m Number of tool calls per tool in the last 5 minutes
+# TYPE librechat_tool_calls_per_tool_5m gauge
+librechat_tool_calls_per_tool_5m{tool_name="web_search"} 3.0
+librechat_tool_calls_per_tool_5m{tool_name="file_search"} 2.0
+
+# HELP librechat_tool_call_errors_5m Number of failed tool calls in the last 5 minutes
+# TYPE librechat_tool_call_errors_5m gauge
+librechat_tool_call_errors_5m 0.0
+
+# HELP librechat_messages_with_tools_total Total number of messages containing tool calls
+# TYPE librechat_messages_with_tools_total gauge
+librechat_messages_with_tools_total 92.0
+
+# HELP librechat_active_tool_users Number of unique users using tools in the last 5 minutes
+# TYPE librechat_active_tool_users gauge
+librechat_active_tool_users 2.0
 ```
 
 ## Development

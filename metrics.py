@@ -34,13 +34,15 @@ class LibreChatMetricsCollector(Collector):
         self.db = self.client[os.getenv("MONGODB_DATABASE", "LibreChat")]
         self.messages_collection = self.db["messages"]
         self._rating_cache = None
+        self._tool_cache = None
 
     def collect(self):
         """
         Collect metrics and yield Prometheus metrics.
         """
-        # Clear rating cache at start of each collection
+        # Clear caches at start of each collection
         self._rating_cache = None
+        self._tool_cache = None
 
         yield from self.collect_message_count()
         yield from self.collect_error_message_count()
@@ -72,6 +74,19 @@ class LibreChatMetricsCollector(Collector):
         yield from self.collect_rating_counts_5m()
         yield from self.collect_rated_message_count()
         yield from self.collect_model_tag_combinations()
+        # Adding new tool usage metrics - OPTIMIZED: Single query fetches all tool data
+        yield from self.collect_tool_calls_total()
+        yield from self.collect_tool_calls_per_tool()
+        yield from self.collect_tool_calls_per_model()
+        yield from self.collect_tool_calls_per_endpoint()
+        yield from self.collect_tool_call_errors_total()
+        yield from self.collect_tool_call_errors_per_tool()
+        yield from self.collect_tool_success_rate_per_tool()
+        yield from self.collect_tool_calls_5m()
+        yield from self.collect_tool_calls_per_tool_5m()
+        yield from self.collect_tool_call_errors_5m()
+        yield from self.collect_messages_with_tools()
+        yield from self.collect_active_tool_users()
 
     def collect_message_count(self):
         """
@@ -1034,6 +1049,534 @@ class LibreChatMetricsCollector(Collector):
             yield metric_down
         except Exception as e:
             logger.exception("Error collecting model tag combinations: %s", e)
+
+    def _fetch_all_tool_metrics(self):
+        """
+        OPTIMIZATION: Fetch all tool metrics in a single MongoDB aggregation query.
+        This reduces database calls significantly by using $facet to combine multiple pipelines.
+        """
+        try:
+            five_minutes_ago = datetime.now(timezone.utc) - timedelta(minutes=5)
+
+            # Single $facet aggregation to get all tool data at once
+            pipeline = [
+                {
+                    "$facet": {
+                        # Total tool calls
+                        "total_calls": [
+                            {"$unwind": "$content"},
+                            {"$match": {"content.type": "tool_call"}},
+                            {"$count": "count"}
+                        ],
+                        # Tool calls per tool name
+                        "per_tool": [
+                            {"$unwind": "$content"},
+                            {"$match": {"content.type": "tool_call"}},
+                            {
+                                "$group": {
+                                    "_id": "$content.tool_call.name",
+                                    "count": {"$sum": 1}
+                                }
+                            }
+                        ],
+                        # Tool calls per model
+                        "per_model": [
+                            {"$unwind": "$content"},
+                            {
+                                "$match": {
+                                    "content.type": "tool_call",
+                                    "model": {"$exists": True, "$ne": None}
+                                }
+                            },
+                            {
+                                "$group": {
+                                    "_id": {
+                                        "model": "$model",
+                                        "tool": "$content.tool_call.name"
+                                    },
+                                    "count": {"$sum": 1}
+                                }
+                            }
+                        ],
+                        # Tool calls per endpoint
+                        "per_endpoint": [
+                            {"$unwind": "$content"},
+                            {
+                                "$match": {
+                                    "content.type": "tool_call",
+                                    "endpoint": {"$exists": True, "$ne": None}
+                                }
+                            },
+                            {
+                                "$group": {
+                                    "_id": {
+                                        "endpoint": "$endpoint",
+                                        "tool": "$content.tool_call.name"
+                                    },
+                                    "count": {"$sum": 1}
+                                }
+                            }
+                        ],
+                        # Failed tool calls (errors)
+                        "errors_per_tool": [
+                            {"$unwind": "$content"},
+                            {
+                                "$match": {
+                                    "content.type": "tool_call",
+                                    "content.tool_call.output": {"$regex": "Error processing tool", "$options": "i"}
+                                }
+                            },
+                            {
+                                "$group": {
+                                    "_id": "$content.tool_call.name",
+                                    "error_count": {"$sum": 1}
+                                }
+                            }
+                        ],
+                        # Total errors
+                        "total_errors": [
+                            {"$unwind": "$content"},
+                            {
+                                "$match": {
+                                    "content.type": "tool_call",
+                                    "content.tool_call.output": {"$regex": "Error processing tool", "$options": "i"}
+                                }
+                            },
+                            {"$count": "count"}
+                        ],
+                        # Tool calls in last 5 minutes
+                        "calls_5m": [
+                            {
+                                "$match": {
+                                    "updatedAt": {"$gte": five_minutes_ago}
+                                }
+                            },
+                            {"$unwind": "$content"},
+                            {"$match": {"content.type": "tool_call"}},
+                            {"$count": "count"}
+                        ],
+                        # Tool calls per tool in last 5 minutes
+                        "per_tool_5m": [
+                            {
+                                "$match": {
+                                    "updatedAt": {"$gte": five_minutes_ago}
+                                }
+                            },
+                            {"$unwind": "$content"},
+                            {"$match": {"content.type": "tool_call"}},
+                            {
+                                "$group": {
+                                    "_id": "$content.tool_call.name",
+                                    "count": {"$sum": 1}
+                                }
+                            }
+                        ],
+                        # Errors in last 5 minutes
+                        "errors_5m": [
+                            {
+                                "$match": {
+                                    "updatedAt": {"$gte": five_minutes_ago}
+                                }
+                            },
+                            {"$unwind": "$content"},
+                            {
+                                "$match": {
+                                    "content.type": "tool_call",
+                                    "content.tool_call.output": {"$regex": "Error processing tool", "$options": "i"}
+                                }
+                            },
+                            {"$count": "count"}
+                        ],
+                        # Messages with tool calls
+                        "messages_with_tools": [
+                            {"$match": {"content.type": "tool_call"}},
+                            {"$count": "count"}
+                        ],
+                        # Active tool users (last 5 minutes)
+                        "active_tool_users": [
+                            {
+                                "$match": {
+                                    "updatedAt": {"$gte": five_minutes_ago},
+                                    "content.type": "tool_call"
+                                }
+                            },
+                            {
+                                "$group": {
+                                    "_id": "$user"
+                                }
+                            },
+                            {"$count": "count"}
+                        ]
+                    }
+                }
+            ]
+
+            results = list(self.messages_collection.aggregate(pipeline))[0]
+
+            # Process results into cache
+            cache = {
+                'total_calls': 0,
+                'per_tool': {},
+                'per_model': {},
+                'per_endpoint': {},
+                'errors_per_tool': {},
+                'total_errors': 0,
+                'calls_5m': 0,
+                'per_tool_5m': {},
+                'errors_5m': 0,
+                'messages_with_tools': 0,
+                'active_tool_users': 0
+            }
+
+            # Total calls
+            if results['total_calls']:
+                cache['total_calls'] = results['total_calls'][0]['count']
+
+            # Per tool
+            for item in results['per_tool']:
+                tool = item['_id'] or 'unknown'
+                cache['per_tool'][tool] = item['count']
+
+            # Per model
+            for item in results['per_model']:
+                model = item['_id']['model'] or 'unknown'
+                tool = item['_id']['tool'] or 'unknown'
+                key = (model, tool)
+                cache['per_model'][key] = item['count']
+
+            # Per endpoint
+            for item in results['per_endpoint']:
+                endpoint = item['_id']['endpoint'] or 'unknown'
+                tool = item['_id']['tool'] or 'unknown'
+                key = (endpoint, tool)
+                cache['per_endpoint'][key] = item['count']
+
+            # Errors per tool
+            for item in results['errors_per_tool']:
+                tool = item['_id'] or 'unknown'
+                cache['errors_per_tool'][tool] = item['error_count']
+
+            # Total errors
+            if results['total_errors']:
+                cache['total_errors'] = results['total_errors'][0]['count']
+
+            # Calls 5m
+            if results['calls_5m']:
+                cache['calls_5m'] = results['calls_5m'][0]['count']
+
+            # Per tool 5m
+            for item in results['per_tool_5m']:
+                tool = item['_id'] or 'unknown'
+                cache['per_tool_5m'][tool] = item['count']
+
+            # Errors 5m
+            if results['errors_5m']:
+                cache['errors_5m'] = results['errors_5m'][0]['count']
+
+            # Messages with tools
+            if results['messages_with_tools']:
+                cache['messages_with_tools'] = results['messages_with_tools'][0]['count']
+
+            # Active tool users
+            if results['active_tool_users']:
+                cache['active_tool_users'] = results['active_tool_users'][0]['count']
+
+            self._tool_cache = cache
+            logger.debug("Tool metrics cached: %d tools, %d model combinations, %d endpoint combinations",
+                         len(cache['per_tool']), len(cache['per_model']), len(cache['per_endpoint']))
+
+        except Exception as e:
+            logger.exception("Error fetching tool metrics: %s", e)
+            # Initialize empty cache on error
+            self._tool_cache = {
+                'total_calls': 0,
+                'per_tool': {},
+                'per_model': {},
+                'per_endpoint': {},
+                'errors_per_tool': {},
+                'total_errors': 0,
+                'calls_5m': 0,
+                'per_tool_5m': {},
+                'errors_5m': 0,
+                'messages_with_tools': 0,
+                'active_tool_users': 0
+            }
+
+    def collect_tool_calls_total(self):
+        """
+        Collect total number of tool calls.
+        OPTIMIZED: Uses cached data from _fetch_all_tool_metrics
+        """
+        try:
+            if self._tool_cache is None:
+                self._fetch_all_tool_metrics()
+
+            total_calls = self._tool_cache['total_calls']
+            logger.debug("Total tool calls: %s", total_calls)
+
+            yield GaugeMetricFamily(
+                "librechat_tool_calls_total",
+                "Total number of tool calls made",
+                value=total_calls,
+            )
+        except Exception as e:
+            logger.exception("Error collecting total tool calls: %s", e)
+
+    def collect_tool_calls_per_tool(self):
+        """
+        Collect number of tool calls per tool type.
+        OPTIMIZED: Uses cached data from _fetch_all_tool_metrics
+        """
+        try:
+            if self._tool_cache is None:
+                self._fetch_all_tool_metrics()
+
+            data = self._tool_cache['per_tool']
+
+            metric = GaugeMetricFamily(
+                "librechat_tool_calls_per_tool",
+                "Number of calls per tool type",
+                labels=["tool_name"],
+            )
+
+            for tool, count in data.items():
+                metric.add_metric([tool], count)
+                logger.debug("Tool calls for %s: %s", tool, count)
+
+            yield metric
+        except Exception as e:
+            logger.exception("Error collecting tool calls per tool: %s", e)
+
+    def collect_tool_calls_per_model(self):
+        """
+        Collect number of tool calls per model and tool combination.
+        OPTIMIZED: Uses cached data from _fetch_all_tool_metrics
+        """
+        try:
+            if self._tool_cache is None:
+                self._fetch_all_tool_metrics()
+
+            data = self._tool_cache['per_model']
+
+            metric = GaugeMetricFamily(
+                "librechat_tool_calls_per_model",
+                "Number of tool calls per model and tool combination",
+                labels=["model", "tool_name"],
+            )
+
+            for (model, tool), count in data.items():
+                metric.add_metric([model, tool], count)
+                logger.debug("Tool calls for model %s, tool %s: %s", model, tool, count)
+
+            yield metric
+        except Exception as e:
+            logger.exception("Error collecting tool calls per model: %s", e)
+
+    def collect_tool_calls_per_endpoint(self):
+        """
+        Collect number of tool calls per endpoint and tool combination.
+        OPTIMIZED: Uses cached data from _fetch_all_tool_metrics
+        """
+        try:
+            if self._tool_cache is None:
+                self._fetch_all_tool_metrics()
+
+            data = self._tool_cache['per_endpoint']
+
+            metric = GaugeMetricFamily(
+                "librechat_tool_calls_per_endpoint",
+                "Number of tool calls per endpoint and tool combination",
+                labels=["endpoint", "tool_name"],
+            )
+
+            for (endpoint, tool), count in data.items():
+                metric.add_metric([endpoint, tool], count)
+                logger.debug("Tool calls for endpoint %s, tool %s: %s", endpoint, tool, count)
+
+            yield metric
+        except Exception as e:
+            logger.exception("Error collecting tool calls per endpoint: %s", e)
+
+    def collect_tool_call_errors_total(self):
+        """
+        Collect total number of failed tool calls.
+        OPTIMIZED: Uses cached data from _fetch_all_tool_metrics
+        """
+        try:
+            if self._tool_cache is None:
+                self._fetch_all_tool_metrics()
+
+            total_errors = self._tool_cache['total_errors']
+            logger.debug("Total tool call errors: %s", total_errors)
+
+            yield CounterMetricFamily(
+                "librechat_tool_call_errors_total",
+                "Total number of failed tool calls",
+                value=total_errors,
+            )
+        except Exception as e:
+            logger.exception("Error collecting total tool call errors: %s", e)
+
+    def collect_tool_call_errors_per_tool(self):
+        """
+        Collect number of failed tool calls per tool.
+        OPTIMIZED: Uses cached data from _fetch_all_tool_metrics
+        """
+        try:
+            if self._tool_cache is None:
+                self._fetch_all_tool_metrics()
+
+            data = self._tool_cache['errors_per_tool']
+
+            metric = CounterMetricFamily(
+                "librechat_tool_call_errors_per_tool",
+                "Number of failed tool calls per tool",
+                labels=["tool_name"],
+            )
+
+            for tool, error_count in data.items():
+                metric.add_metric([tool], error_count)
+                logger.debug("Tool call errors for %s: %s", tool, error_count)
+
+            yield metric
+        except Exception as e:
+            logger.exception("Error collecting tool call errors per tool: %s", e)
+
+    def collect_tool_success_rate_per_tool(self):
+        """
+        Collect success rate percentage (0-100) per tool.
+        OPTIMIZED: Uses cached data from _fetch_all_tool_metrics
+        """
+        try:
+            if self._tool_cache is None:
+                self._fetch_all_tool_metrics()
+
+            total_per_tool = self._tool_cache['per_tool']
+            errors_per_tool = self._tool_cache['errors_per_tool']
+
+            metric = GaugeMetricFamily(
+                "librechat_tool_success_rate_per_tool",
+                "Success rate percentage per tool (0-100)",
+                labels=["tool_name"],
+            )
+
+            for tool, total_calls in total_per_tool.items():
+                errors = errors_per_tool.get(tool, 0)
+                success_rate = ((total_calls - errors) / total_calls * 100) if total_calls > 0 else 100
+                metric.add_metric([tool], success_rate)
+                logger.debug(
+                    "Success rate for %s: %.2f%% (%d/%d)",
+                    tool, success_rate, total_calls - errors, total_calls
+                )
+
+            yield metric
+        except Exception as e:
+            logger.exception("Error collecting tool success rate: %s", e)
+
+    def collect_tool_calls_5m(self):
+        """
+        Collect number of tool calls in the last 5 minutes.
+        OPTIMIZED: Uses cached data from _fetch_all_tool_metrics
+        """
+        try:
+            if self._tool_cache is None:
+                self._fetch_all_tool_metrics()
+
+            calls_5m = self._tool_cache['calls_5m']
+            logger.debug("Tool calls in last 5 minutes: %s", calls_5m)
+
+            yield GaugeMetricFamily(
+                "librechat_tool_calls_5m",
+                "Number of tool calls in the last 5 minutes",
+                value=calls_5m,
+            )
+        except Exception as e:
+            logger.exception("Error collecting tool calls in last 5 minutes: %s", e)
+
+    def collect_tool_calls_per_tool_5m(self):
+        """
+        Collect number of tool calls per tool in the last 5 minutes.
+        OPTIMIZED: Uses cached data from _fetch_all_tool_metrics
+        """
+        try:
+            if self._tool_cache is None:
+                self._fetch_all_tool_metrics()
+
+            data = self._tool_cache['per_tool_5m']
+
+            metric = GaugeMetricFamily(
+                "librechat_tool_calls_per_tool_5m",
+                "Number of tool calls per tool in the last 5 minutes",
+                labels=["tool_name"],
+            )
+
+            for tool, count in data.items():
+                metric.add_metric([tool], count)
+                logger.debug("Tool calls in last 5 minutes for %s: %s", tool, count)
+
+            yield metric
+        except Exception as e:
+            logger.exception("Error collecting tool calls per tool in last 5 minutes: %s", e)
+
+    def collect_tool_call_errors_5m(self):
+        """
+        Collect number of failed tool calls in the last 5 minutes.
+        OPTIMIZED: Uses cached data from _fetch_all_tool_metrics
+        """
+        try:
+            if self._tool_cache is None:
+                self._fetch_all_tool_metrics()
+
+            errors_5m = self._tool_cache['errors_5m']
+            logger.debug("Tool call errors in last 5 minutes: %s", errors_5m)
+
+            yield GaugeMetricFamily(
+                "librechat_tool_call_errors_5m",
+                "Number of failed tool calls in the last 5 minutes",
+                value=errors_5m,
+            )
+        except Exception as e:
+            logger.exception("Error collecting tool call errors in last 5 minutes: %s", e)
+
+    def collect_messages_with_tools(self):
+        """
+        Collect total number of messages that contain tool calls.
+        OPTIMIZED: Uses cached data from _fetch_all_tool_metrics
+        """
+        try:
+            if self._tool_cache is None:
+                self._fetch_all_tool_metrics()
+
+            messages_with_tools = self._tool_cache['messages_with_tools']
+            logger.debug("Messages with tool calls: %s", messages_with_tools)
+
+            yield GaugeMetricFamily(
+                "librechat_messages_with_tools_total",
+                "Total number of messages containing tool calls",
+                value=messages_with_tools,
+            )
+        except Exception as e:
+            logger.exception("Error collecting messages with tools: %s", e)
+
+    def collect_active_tool_users(self):
+        """
+        Collect number of unique users using tools in the last 5 minutes.
+        OPTIMIZED: Uses cached data from _fetch_all_tool_metrics
+        """
+        try:
+            if self._tool_cache is None:
+                self._fetch_all_tool_metrics()
+
+            active_users = self._tool_cache['active_tool_users']
+            logger.debug("Active tool users in last 5 minutes: %s", active_users)
+
+            yield GaugeMetricFamily(
+                "librechat_active_tool_users",
+                "Number of unique users using tools in the last 5 minutes",
+                value=active_users,
+            )
+        except Exception as e:
+            logger.exception("Error collecting active tool users: %s", e)
 
 
 if __name__ == "__main__":
