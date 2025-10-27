@@ -31,7 +31,7 @@ class LibreChatMetricsCollector(Collector):
     def __init__(self, mongodb_uri, cache_ttl=60):
         """
         Initialize the MongoDB client and set up initial state.
-        
+
         Args:
             mongodb_uri: MongoDB connection URI
             cache_ttl: Cache time-to-live in seconds (default: 60)
@@ -39,7 +39,7 @@ class LibreChatMetricsCollector(Collector):
         self.client = MongoClient(mongodb_uri)
         self.db = self.client[os.getenv("MONGODB_DATABASE", "LibreChat")]
         self.messages_collection = self.db["messages"]
-        
+
         # Cache configuration
         self.cache_enabled = os.getenv("METRICS_CACHE_ENABLED", "true").lower() == "true"
         self.cache_ttl = cache_ttl
@@ -48,7 +48,7 @@ class LibreChatMetricsCollector(Collector):
         self._cache_lock = threading.Lock()
         self._rating_cache = None
         self._tool_cache = None
-        
+
         # Background collection thread
         self._collection_thread = None
         self._stop_collection = threading.Event()
@@ -73,6 +73,7 @@ class LibreChatMetricsCollector(Collector):
         logger.info("  Rating metrics: %s", self.enable_rating_metrics)
         logger.info("  Tool metrics: %s", self.enable_tool_metrics)
         logger.info("  File metrics: %s", self.enable_file_metrics)
+
     def _start_background_collection(self):
         """
         Start background thread for metrics collection.
@@ -95,22 +96,22 @@ class LibreChatMetricsCollector(Collector):
             try:
                 logger.debug("Background collection: Starting metrics collection")
                 start_time = time.time()
-                
+
                 # Collect all metrics into cache
                 metrics = list(self._collect_all_metrics())
-                
+
                 # Update cache atomically
                 with self._cache_lock:
                     self._metrics_cache = metrics
                     self._cache_timestamp = time.time()
-                
+
                 elapsed = time.time() - start_time
-                logger.info("Background collection: Collected %d metrics in %.2f seconds", 
-                           len(metrics), elapsed)
-                
+                logger.info("Background collection: Collected %d metrics in %.2f seconds",
+                            len(metrics), elapsed)
+
             except Exception as e:
                 logger.exception("Error in background collection loop: %s", e)
-            
+
             # Sleep for cache_ttl seconds or until stop event
             self._stop_collection.wait(self.cache_ttl)
 
@@ -133,7 +134,7 @@ class LibreChatMetricsCollector(Collector):
                     return
                 else:
                     logger.warning("Cache enabled but no cached metrics available, collecting fresh metrics")
-        
+
         # Fall back to fresh collection if cache disabled or unavailable
         logger.debug("Collecting fresh metrics")
         yield from self._collect_all_metrics()
@@ -1711,7 +1712,7 @@ class LibreChatMetricsCollector(Collector):
 if __name__ == "__main__":
     # Get MongoDB URI and Prometheus port from environment variables
     mongodb_uri = os.getenv("MONGODB_URI", "mongodb://mongodb:27017/")
-    
+
     # Get cache TTL from environment (default: 60 seconds)
     cache_ttl = int(os.getenv("METRICS_CACHE_TTL", "60"))
 
@@ -1720,10 +1721,10 @@ if __name__ == "__main__":
     # Start the Prometheus exporter
     collector = LibreChatMetricsCollector(mongodb_uri, cache_ttl=cache_ttl)
     REGISTRY.register(collector)
-    
+
     # Start background collection thread if caching is enabled
     collector._start_background_collection()
-    
+
     logger.info("Starting server on port %i", port)
 
     root = Resource()
