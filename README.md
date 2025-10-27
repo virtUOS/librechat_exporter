@@ -86,6 +86,18 @@ LOGGING_FORMAT="%(asctime)s - %(levelname)s - %(message)s"
 # Specify Mongo Database - Optional. Defaults to "LibreChat"
 MONGODB_DATABASE=librechat
 
+# ===== Performance Optimization =====
+# Background cache enabled (recommended for large databases)
+# When enabled, metrics are collected in a background thread and cached
+# This prevents slow HTTP responses and Prometheus scrape timeouts
+METRICS_CACHE_ENABLED=true
+
+# Cache time-to-live in seconds (how often metrics are refreshed)
+# Lower values = more up-to-date metrics but more MongoDB load
+# Higher values = less MongoDB load but slightly stale metrics
+# Recommended: 60 seconds for most deployments
+METRICS_CACHE_TTL=60
+
 # ===== Metric Group Toggles =====
 # Enable/disable specific metric groups to optimize performance
 # All metrics are enabled by default. Set to "false" to disable a group.

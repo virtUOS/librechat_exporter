@@ -1,5 +1,7 @@
 import logging
 import os
+import threading
+import time
 from datetime import datetime, timedelta, timezone
 
 from dotenv import load_dotenv
@@ -26,15 +28,30 @@ class LibreChatMetricsCollector(Collector):
     A custom Prometheus collector that gathers metrics from the LibreChat MongoDB database.
     """
 
-    def __init__(self, mongodb_uri):
+    def __init__(self, mongodb_uri, cache_ttl=60):
         """
         Initialize the MongoDB client and set up initial state.
+
+        Args:
+            mongodb_uri: MongoDB connection URI
+            cache_ttl: Cache time-to-live in seconds (default: 60)
         """
         self.client = MongoClient(mongodb_uri)
         self.db = self.client[os.getenv("MONGODB_DATABASE", "LibreChat")]
         self.messages_collection = self.db["messages"]
+
+        # Cache configuration
+        self.cache_enabled = os.getenv("METRICS_CACHE_ENABLED", "true").lower() == "true"
+        self.cache_ttl = cache_ttl
+        self._metrics_cache = None
+        self._cache_timestamp = None
+        self._cache_lock = threading.Lock()
         self._rating_cache = None
         self._tool_cache = None
+
+        # Background collection thread
+        self._collection_thread = None
+        self._stop_collection = threading.Event()
 
         # Metric group configurations - allow users to disable expensive metric groups
         # All metrics are enabled by default for backward compatibility
@@ -57,9 +74,74 @@ class LibreChatMetricsCollector(Collector):
         logger.info("  Tool metrics: %s", self.enable_tool_metrics)
         logger.info("  File metrics: %s", self.enable_file_metrics)
 
+    def _start_background_collection(self):
+        """
+        Start background thread for metrics collection.
+        """
+        if self.cache_enabled and self._collection_thread is None:
+            self._stop_collection.clear()
+            self._collection_thread = threading.Thread(
+                target=self._collect_loop,
+                daemon=True,
+                name="MetricsCollectionThread"
+            )
+            self._collection_thread.start()
+            logger.info("Background metrics collection thread started with TTL=%d seconds", self.cache_ttl)
+
+    def _collect_loop(self):
+        """
+        Background loop that periodically collects all metrics.
+        """
+        while not self._stop_collection.is_set():
+            try:
+                logger.debug("Background collection: Starting metrics collection")
+                start_time = time.time()
+
+                # Collect all metrics into cache
+                metrics = list(self._collect_all_metrics())
+
+                # Update cache atomically
+                with self._cache_lock:
+                    self._metrics_cache = metrics
+                    self._cache_timestamp = time.time()
+
+                elapsed = time.time() - start_time
+                logger.info("Background collection: Collected %d metrics in %.2f seconds",
+                            len(metrics), elapsed)
+
+            except Exception as e:
+                logger.exception("Error in background collection loop: %s", e)
+
+            # Sleep for cache_ttl seconds or until stop event
+            self._stop_collection.wait(self.cache_ttl)
+
+        logger.info("Cache configuration:")
+        logger.info("  Cache enabled: %s", self.cache_enabled)
+        logger.info("  Cache TTL: %d seconds", self.cache_ttl)
+
     def collect(self):
         """
         Collect metrics and yield Prometheus metrics.
+        If caching is enabled, serve from cache. Otherwise, collect fresh metrics.
+        """
+        if self.cache_enabled:
+            # Serve from cache
+            with self._cache_lock:
+                if self._metrics_cache is not None:
+                    cache_age = time.time() - self._cache_timestamp if self._cache_timestamp else float('inf')
+                    logger.debug("Serving metrics from cache (age: %.2f seconds)", cache_age)
+                    yield from self._metrics_cache
+                    return
+                else:
+                    logger.warning("Cache enabled but no cached metrics available, collecting fresh metrics")
+
+        # Fall back to fresh collection if cache disabled or unavailable
+        logger.debug("Collecting fresh metrics")
+        yield from self._collect_all_metrics()
+
+    def _collect_all_metrics(self):
+        """
+        Yield all enabled metrics. This is called by the background thread or directly.
         """
         # Clear caches at start of each collection
         self._rating_cache = None
@@ -1631,11 +1713,18 @@ if __name__ == "__main__":
     # Get MongoDB URI and Prometheus port from environment variables
     mongodb_uri = os.getenv("MONGODB_URI", "mongodb://mongodb:27017/")
 
+    # Get cache TTL from environment (default: 60 seconds)
+    cache_ttl = int(os.getenv("METRICS_CACHE_TTL", "60"))
+
     port = 8000
 
     # Start the Prometheus exporter
-    collector = LibreChatMetricsCollector(mongodb_uri)
+    collector = LibreChatMetricsCollector(mongodb_uri, cache_ttl=cache_ttl)
     REGISTRY.register(collector)
+
+    # Start background collection thread if caching is enabled
+    collector._start_background_collection()
+
     logger.info("Starting server on port %i", port)
 
     root = Resource()
