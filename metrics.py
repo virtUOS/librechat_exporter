@@ -795,111 +795,14 @@ class LibreChatMetricsCollector(Collector):
 
     def _fetch_all_rating_metrics(self):
         """
-        OPTIMIZATION: Fetch all rating metrics in a single MongoDB aggregation query.
-        This reduces database calls from ~10 to 1, significantly improving performance.
+        Fetch all rating metrics using separate MongoDB aggregation queries.
+        This approach is compatible with AWS DocumentDB and other MongoDB-compatible databases.
+        Uses sequential queries to gather all rating data efficiently.
         """
         try:
             five_minutes_ago = datetime.now(timezone.utc) - timedelta(minutes=5)
 
-            # Single $facet aggregation to get all rating data at once
-            pipeline = [
-                {
-                    "$facet": {
-                        # Total counts
-                        "total_ratings": [
-                            {"$match": {"feedback.rating": {"$in": ["thumbsUp", "thumbsDown"]}}},
-                            {
-                                "$group": {
-                                    "_id": "$feedback.rating",
-                                    "count": {"$sum": 1}
-                                }
-                            }
-                        ],
-                        # Per-model ratings
-                        "per_model": [
-                            {
-                                "$match": {
-                                    "feedback.rating": {"$in": ["thumbsUp", "thumbsDown"]},
-                                    "model": {"$exists": True, "$ne": None}
-                                }
-                            },
-                            {
-                                "$group": {
-                                    "_id": {"model": "$model", "rating": "$feedback.rating"},
-                                    "count": {"$sum": 1}
-                                }
-                            }
-                        ],
-                        # Per-tag ratings
-                        "per_tag": [
-                            {
-                                "$match": {
-                                    "feedback.tag": {"$exists": True, "$ne": None}
-                                }
-                            },
-                            {
-                                "$group": {
-                                    "_id": "$feedback.tag",
-                                    "count": {"$sum": 1}
-                                }
-                            }
-                        ],
-                        # Model-tag combinations
-                        "model_tag_combos": [
-                            {
-                                "$match": {
-                                    "feedback.tag": {"$exists": True, "$ne": None},
-                                    "feedback.rating": {"$exists": True, "$ne": None},
-                                    "model": {"$exists": True, "$ne": None}
-                                }
-                            },
-                            {
-                                "$group": {
-                                    "_id": {
-                                        "model": "$model",
-                                        "tag": "$feedback.tag",
-                                        "rating": "$feedback.rating"
-                                    },
-                                    "count": {"$sum": 1}
-                                }
-                            }
-                        ],
-                        # 5-minute ratings
-                        "ratings_5m": [
-                            {
-                                "$match": {
-                                    "feedback.rating": {"$in": ["thumbsUp", "thumbsDown"]},
-                                    "updatedAt": {"$gte": five_minutes_ago}
-                                }
-                            },
-                            {
-                                "$group": {
-                                    "_id": "$feedback.rating",
-                                    "count": {"$sum": 1}
-                                }
-                            }
-                        ],
-                        # Total rated messages
-                        "rated_count": [
-                            {
-                                "$match": {
-                                    "feedback": {"$exists": True, "$ne": None}
-                                }
-                            },
-                            {
-                                "$group": {
-                                    "_id": None,
-                                    "count": {"$sum": 1}
-                                }
-                            }
-                        ]
-                    }
-                }
-            ]
-
-            results = list(self.messages_collection.aggregate(pipeline))[0]
-
-            # Process results into cache
+            # Initialize cache
             cache = {
                 'total_thumbs_up': 0,
                 'total_thumbs_down': 0,
@@ -911,15 +814,33 @@ class LibreChatMetricsCollector(Collector):
                 'rated_count': 0
             }
 
-            # Total ratings
-            for item in results['total_ratings']:
+            # Query 1: Total ratings by type
+            total_ratings_pipeline = [
+                {"$match": {"feedback.rating": {"$in": ["thumbsUp", "thumbsDown"]}}},
+                {"$group": {"_id": "$feedback.rating", "count": {"$sum": 1}}}
+            ]
+            for item in self.messages_collection.aggregate(total_ratings_pipeline):
                 if item['_id'] == 'thumbsUp':
                     cache['total_thumbs_up'] = item['count']
                 elif item['_id'] == 'thumbsDown':
                     cache['total_thumbs_down'] = item['count']
 
-            # Per-model ratings
-            for item in results['per_model']:
+            # Query 2: Per-model ratings
+            per_model_pipeline = [
+                {
+                    "$match": {
+                        "feedback.rating": {"$in": ["thumbsUp", "thumbsDown"]},
+                        "model": {"$exists": True, "$ne": None}
+                    }
+                },
+                {
+                    "$group": {
+                        "_id": {"model": "$model", "rating": "$feedback.rating"},
+                        "count": {"$sum": 1}
+                    }
+                }
+            ]
+            for item in self.messages_collection.aggregate(per_model_pipeline):
                 model = item['_id']['model'] or 'unknown'
                 rating = item['_id']['rating']
                 if model not in cache['per_model']:
@@ -927,29 +848,66 @@ class LibreChatMetricsCollector(Collector):
                 cache['per_model'][model][rating] = item['count']
                 cache['per_model'][model]['total'] += item['count']
 
-            # Per-tag ratings
-            for item in results['per_tag']:
+            # Query 3: Per-tag ratings
+            per_tag_pipeline = [
+                {"$match": {"feedback.tag": {"$exists": True, "$ne": None}}},
+                {"$group": {"_id": "$feedback.tag", "count": {"$sum": 1}}}
+            ]
+            for item in self.messages_collection.aggregate(per_tag_pipeline):
                 tag = item['_id'] or 'unknown'
                 cache['per_tag'][tag] = item['count']
 
-            # Model-tag combinations
-            for item in results['model_tag_combos']:
+            # Query 4: Model-tag combinations
+            model_tag_pipeline = [
+                {
+                    "$match": {
+                        "feedback.tag": {"$exists": True, "$ne": None},
+                        "feedback.rating": {"$exists": True, "$ne": None},
+                        "model": {"$exists": True, "$ne": None}
+                    }
+                },
+                {
+                    "$group": {
+                        "_id": {
+                            "model": "$model",
+                            "tag": "$feedback.tag",
+                            "rating": "$feedback.rating"
+                        },
+                        "count": {"$sum": 1}
+                    }
+                }
+            ]
+            for item in self.messages_collection.aggregate(model_tag_pipeline):
                 model = item['_id']['model'] or 'unknown'
                 tag = item['_id']['tag'] or 'unknown'
                 rating = item['_id']['rating']
                 key = (model, tag, rating)
                 cache['model_tag_combos'][key] = item['count']
 
-            # 5-minute ratings
-            for item in results['ratings_5m']:
+            # Query 5: 5-minute ratings
+            ratings_5m_pipeline = [
+                {
+                    "$match": {
+                        "feedback.rating": {"$in": ["thumbsUp", "thumbsDown"]},
+                        "updatedAt": {"$gte": five_minutes_ago}
+                    }
+                },
+                {"$group": {"_id": "$feedback.rating", "count": {"$sum": 1}}}
+            ]
+            for item in self.messages_collection.aggregate(ratings_5m_pipeline):
                 if item['_id'] == 'thumbsUp':
                     cache['thumbs_up_5m'] = item['count']
                 elif item['_id'] == 'thumbsDown':
                     cache['thumbs_down_5m'] = item['count']
 
-            # Rated count
-            if results['rated_count']:
-                cache['rated_count'] = results['rated_count'][0]['count']
+            # Query 6: Total rated messages count
+            rated_count_pipeline = [
+                {"$match": {"feedback": {"$exists": True, "$ne": None}}},
+                {"$group": {"_id": None, "count": {"$sum": 1}}}
+            ]
+            rated_results = list(self.messages_collection.aggregate(rated_count_pipeline))
+            if rated_results:
+                cache['rated_count'] = rated_results[0]['count']
 
             self._rating_cache = cache
             logger.debug("Rating metrics cached: %d models, %d tags, %d combos",
@@ -1182,168 +1140,14 @@ class LibreChatMetricsCollector(Collector):
 
     def _fetch_all_tool_metrics(self):
         """
-        OPTIMIZATION: Fetch all tool metrics in a single MongoDB aggregation query.
-        This reduces database calls significantly by using $facet to combine multiple pipelines.
+        Fetch all tool metrics using separate MongoDB aggregation queries.
+        This approach is compatible with AWS DocumentDB and other MongoDB-compatible databases.
+        Uses sequential queries to gather all tool usage data efficiently.
         """
         try:
             five_minutes_ago = datetime.now(timezone.utc) - timedelta(minutes=5)
 
-            # Single $facet aggregation to get all tool data at once
-            pipeline = [
-                {
-                    "$facet": {
-                        # Total tool calls
-                        "total_calls": [
-                            {"$unwind": "$content"},
-                            {"$match": {"content.type": "tool_call"}},
-                            {"$count": "count"}
-                        ],
-                        # Tool calls per tool name
-                        "per_tool": [
-                            {"$unwind": "$content"},
-                            {"$match": {"content.type": "tool_call"}},
-                            {
-                                "$group": {
-                                    "_id": "$content.tool_call.name",
-                                    "count": {"$sum": 1}
-                                }
-                            }
-                        ],
-                        # Tool calls per model
-                        "per_model": [
-                            {"$unwind": "$content"},
-                            {
-                                "$match": {
-                                    "content.type": "tool_call",
-                                    "model": {"$exists": True, "$ne": None}
-                                }
-                            },
-                            {
-                                "$group": {
-                                    "_id": {
-                                        "model": "$model",
-                                        "tool": "$content.tool_call.name"
-                                    },
-                                    "count": {"$sum": 1}
-                                }
-                            }
-                        ],
-                        # Tool calls per endpoint
-                        "per_endpoint": [
-                            {"$unwind": "$content"},
-                            {
-                                "$match": {
-                                    "content.type": "tool_call",
-                                    "endpoint": {"$exists": True, "$ne": None}
-                                }
-                            },
-                            {
-                                "$group": {
-                                    "_id": {
-                                        "endpoint": "$endpoint",
-                                        "tool": "$content.tool_call.name"
-                                    },
-                                    "count": {"$sum": 1}
-                                }
-                            }
-                        ],
-                        # Failed tool calls (errors)
-                        "errors_per_tool": [
-                            {"$unwind": "$content"},
-                            {
-                                "$match": {
-                                    "content.type": "tool_call",
-                                    "content.tool_call.output": {"$regex": "Error processing tool", "$options": "i"}
-                                }
-                            },
-                            {
-                                "$group": {
-                                    "_id": "$content.tool_call.name",
-                                    "error_count": {"$sum": 1}
-                                }
-                            }
-                        ],
-                        # Total errors
-                        "total_errors": [
-                            {"$unwind": "$content"},
-                            {
-                                "$match": {
-                                    "content.type": "tool_call",
-                                    "content.tool_call.output": {"$regex": "Error processing tool", "$options": "i"}
-                                }
-                            },
-                            {"$count": "count"}
-                        ],
-                        # Tool calls in last 5 minutes
-                        "calls_5m": [
-                            {
-                                "$match": {
-                                    "updatedAt": {"$gte": five_minutes_ago}
-                                }
-                            },
-                            {"$unwind": "$content"},
-                            {"$match": {"content.type": "tool_call"}},
-                            {"$count": "count"}
-                        ],
-                        # Tool calls per tool in last 5 minutes
-                        "per_tool_5m": [
-                            {
-                                "$match": {
-                                    "updatedAt": {"$gte": five_minutes_ago}
-                                }
-                            },
-                            {"$unwind": "$content"},
-                            {"$match": {"content.type": "tool_call"}},
-                            {
-                                "$group": {
-                                    "_id": "$content.tool_call.name",
-                                    "count": {"$sum": 1}
-                                }
-                            }
-                        ],
-                        # Errors in last 5 minutes
-                        "errors_5m": [
-                            {
-                                "$match": {
-                                    "updatedAt": {"$gte": five_minutes_ago}
-                                }
-                            },
-                            {"$unwind": "$content"},
-                            {
-                                "$match": {
-                                    "content.type": "tool_call",
-                                    "content.tool_call.output": {"$regex": "Error processing tool", "$options": "i"}
-                                }
-                            },
-                            {"$count": "count"}
-                        ],
-                        # Messages with tool calls
-                        "messages_with_tools": [
-                            {"$match": {"content.type": "tool_call"}},
-                            {"$count": "count"}
-                        ],
-                        # Active tool users (last 5 minutes)
-                        "active_tool_users": [
-                            {
-                                "$match": {
-                                    "updatedAt": {"$gte": five_minutes_ago},
-                                    "content.type": "tool_call"
-                                }
-                            },
-                            {
-                                "$group": {
-                                    "_id": "$user"
-                                }
-                            },
-                            {"$count": "count"}
-                        ]
-                    }
-                }
-            ]
-
-            results = list(self.messages_collection.aggregate(pipeline))[0]
-
-            # Process results into cache
+            # Initialize cache
             cache = {
                 'total_calls': 0,
                 'per_tool': {},
@@ -1358,58 +1162,161 @@ class LibreChatMetricsCollector(Collector):
                 'active_tool_users': 0
             }
 
-            # Total calls
-            if results['total_calls']:
-                cache['total_calls'] = results['total_calls'][0]['count']
+            # Query 1: Total tool calls
+            total_calls_pipeline = [
+                {"$unwind": "$content"},
+                {"$match": {"content.type": "tool_call"}},
+                {"$count": "count"}
+            ]
+            total_calls_result = list(self.messages_collection.aggregate(total_calls_pipeline))
+            if total_calls_result:
+                cache['total_calls'] = total_calls_result[0]['count']
 
-            # Per tool
-            for item in results['per_tool']:
+            # Query 2: Tool calls per tool name
+            per_tool_pipeline = [
+                {"$unwind": "$content"},
+                {"$match": {"content.type": "tool_call"}},
+                {"$group": {"_id": "$content.tool_call.name", "count": {"$sum": 1}}}
+            ]
+            for item in self.messages_collection.aggregate(per_tool_pipeline):
                 tool = item['_id'] or 'unknown'
                 cache['per_tool'][tool] = item['count']
 
-            # Per model
-            for item in results['per_model']:
+            # Query 3: Tool calls per model
+            per_model_pipeline = [
+                {"$unwind": "$content"},
+                {
+                    "$match": {
+                        "content.type": "tool_call",
+                        "model": {"$exists": True, "$ne": None}
+                    }
+                },
+                {
+                    "$group": {
+                        "_id": {"model": "$model", "tool": "$content.tool_call.name"},
+                        "count": {"$sum": 1}
+                    }
+                }
+            ]
+            for item in self.messages_collection.aggregate(per_model_pipeline):
                 model = item['_id']['model'] or 'unknown'
                 tool = item['_id']['tool'] or 'unknown'
                 key = (model, tool)
                 cache['per_model'][key] = item['count']
 
-            # Per endpoint
-            for item in results['per_endpoint']:
+            # Query 4: Tool calls per endpoint
+            per_endpoint_pipeline = [
+                {"$unwind": "$content"},
+                {
+                    "$match": {
+                        "content.type": "tool_call",
+                        "endpoint": {"$exists": True, "$ne": None}
+                    }
+                },
+                {
+                    "$group": {
+                        "_id": {"endpoint": "$endpoint", "tool": "$content.tool_call.name"},
+                        "count": {"$sum": 1}
+                    }
+                }
+            ]
+            for item in self.messages_collection.aggregate(per_endpoint_pipeline):
                 endpoint = item['_id']['endpoint'] or 'unknown'
                 tool = item['_id']['tool'] or 'unknown'
                 key = (endpoint, tool)
                 cache['per_endpoint'][key] = item['count']
 
-            # Errors per tool
-            for item in results['errors_per_tool']:
+            # Query 5: Failed tool calls (errors) per tool
+            errors_per_tool_pipeline = [
+                {"$unwind": "$content"},
+                {
+                    "$match": {
+                        "content.type": "tool_call",
+                        "content.tool_call.output": {"$regex": "Error processing tool", "$options": "i"}
+                    }
+                },
+                {"$group": {"_id": "$content.tool_call.name", "error_count": {"$sum": 1}}}
+            ]
+            for item in self.messages_collection.aggregate(errors_per_tool_pipeline):
                 tool = item['_id'] or 'unknown'
                 cache['errors_per_tool'][tool] = item['error_count']
 
-            # Total errors
-            if results['total_errors']:
-                cache['total_errors'] = results['total_errors'][0]['count']
+            # Query 6: Total errors
+            total_errors_pipeline = [
+                {"$unwind": "$content"},
+                {
+                    "$match": {
+                        "content.type": "tool_call",
+                        "content.tool_call.output": {"$regex": "Error processing tool", "$options": "i"}
+                    }
+                },
+                {"$count": "count"}
+            ]
+            total_errors_result = list(self.messages_collection.aggregate(total_errors_pipeline))
+            if total_errors_result:
+                cache['total_errors'] = total_errors_result[0]['count']
 
-            # Calls 5m
-            if results['calls_5m']:
-                cache['calls_5m'] = results['calls_5m'][0]['count']
+            # Query 7: Tool calls in last 5 minutes
+            calls_5m_pipeline = [
+                {"$match": {"updatedAt": {"$gte": five_minutes_ago}}},
+                {"$unwind": "$content"},
+                {"$match": {"content.type": "tool_call"}},
+                {"$count": "count"}
+            ]
+            calls_5m_result = list(self.messages_collection.aggregate(calls_5m_pipeline))
+            if calls_5m_result:
+                cache['calls_5m'] = calls_5m_result[0]['count']
 
-            # Per tool 5m
-            for item in results['per_tool_5m']:
+            # Query 8: Tool calls per tool in last 5 minutes
+            per_tool_5m_pipeline = [
+                {"$match": {"updatedAt": {"$gte": five_minutes_ago}}},
+                {"$unwind": "$content"},
+                {"$match": {"content.type": "tool_call"}},
+                {"$group": {"_id": "$content.tool_call.name", "count": {"$sum": 1}}}
+            ]
+            for item in self.messages_collection.aggregate(per_tool_5m_pipeline):
                 tool = item['_id'] or 'unknown'
                 cache['per_tool_5m'][tool] = item['count']
 
-            # Errors 5m
-            if results['errors_5m']:
-                cache['errors_5m'] = results['errors_5m'][0]['count']
+            # Query 9: Errors in last 5 minutes
+            errors_5m_pipeline = [
+                {"$match": {"updatedAt": {"$gte": five_minutes_ago}}},
+                {"$unwind": "$content"},
+                {
+                    "$match": {
+                        "content.type": "tool_call",
+                        "content.tool_call.output": {"$regex": "Error processing tool", "$options": "i"}
+                    }
+                },
+                {"$count": "count"}
+            ]
+            errors_5m_result = list(self.messages_collection.aggregate(errors_5m_pipeline))
+            if errors_5m_result:
+                cache['errors_5m'] = errors_5m_result[0]['count']
 
-            # Messages with tools
-            if results['messages_with_tools']:
-                cache['messages_with_tools'] = results['messages_with_tools'][0]['count']
+            # Query 10: Messages with tool calls
+            messages_with_tools_pipeline = [
+                {"$match": {"content.type": "tool_call"}},
+                {"$count": "count"}
+            ]
+            messages_with_tools_result = list(self.messages_collection.aggregate(messages_with_tools_pipeline))
+            if messages_with_tools_result:
+                cache['messages_with_tools'] = messages_with_tools_result[0]['count']
 
-            # Active tool users
-            if results['active_tool_users']:
-                cache['active_tool_users'] = results['active_tool_users'][0]['count']
+            # Query 11: Active tool users (last 5 minutes)
+            active_tool_users_pipeline = [
+                {
+                    "$match": {
+                        "updatedAt": {"$gte": five_minutes_ago},
+                        "content.type": "tool_call"
+                    }
+                },
+                {"$group": {"_id": "$user"}},
+                {"$count": "count"}
+            ]
+            active_tool_users_result = list(self.messages_collection.aggregate(active_tool_users_pipeline))
+            if active_tool_users_result:
+                cache['active_tool_users'] = active_tool_users_result[0]['count']
 
             self._tool_cache = cache
             logger.debug("Tool metrics cached: %d tools, %d model combinations, %d endpoint combinations",
