@@ -366,32 +366,66 @@ class LibreChatMetricsCollector(Collector):
     def collect_input_token_count_per_model(self):
         """
         Collect number of input tokens per model.
+        User messages typically don't have the model field, so we resolve
+        the model via conversationId from assistant messages.
         """
         try:
-            pipeline = [
+            # Get conversation → model mapping from assistant messages
+            pipeline_conv_model = [
+                {
+                    "$match": {
+                        "sender": {"$ne": "User"},
+                        "model": {"$exists": True, "$ne": None},
+                    }
+                },
+                {"$sort": {"createdAt": -1}},
+                {
+                    "$group": {
+                        "_id": "$conversationId",
+                        "model": {"$first": "$model"},
+                    }
+                },
+            ]
+
+            # Get user tokens per conversation
+            pipeline_user_tokens = [
                 {
                     "$match": {
                         "sender": "User",
                         "tokenCount": {"$exists": True, "$ne": None},
-                        "model": {"$exists": True, "$ne": None},
                     }
                 },
                 {
                     "$group": {
-                        "_id": "$model",
-                        "totalInputTokens": {"$sum": "$tokenCount"},
+                        "_id": "$conversationId",
+                        "totalTokens": {"$sum": "$tokenCount"},
                     }
                 },
             ]
-            results = self.messages_collection.aggregate(pipeline)
+
+            results_conv_model = list(self.messages_collection.aggregate(pipeline_conv_model))
+            results_user_tokens = list(self.messages_collection.aggregate(pipeline_user_tokens))
+
+            # Build conversation → model map
+            conv_model_map = {}
+            for result in results_conv_model:
+                conv_id = result["_id"]
+                if conv_id is not None:
+                    conv_model_map[conv_id] = result["model"] or "unknown"
+
+            # Aggregate input tokens per model
+            model_input_tokens = {}
+            for result in results_user_tokens:
+                conv_id = result["_id"]
+                model = conv_model_map.get(conv_id, "unknown")
+                model_input_tokens[model] = model_input_tokens.get(model, 0) + result["totalTokens"]
+
             metric = GaugeMetricFamily(
                 "librechat_input_tokens_per_model_total",
                 "Number of input tokens per model",
                 labels=["model"],
             )
-            for result in results:
-                model = result["_id"] or "unknown"
-                tokens = result["totalInputTokens"]
+            for model, tokens in model_input_tokens.items():
                 metric.add_metric([model], tokens)
                 logger.debug("Input tokens for model %s: %s", model, tokens)
             yield metric
@@ -680,10 +714,11 @@ class LibreChatMetricsCollector(Collector):
             )
             logger.debug("Output tokens in last 5 minutes: %s", output_tokens_5m)
 
-            # Per-model token counts (5m)
-            pipeline_model_tokens_5m = [
+            # Per-model output token counts (5m) - assistant messages have the model field
+            pipeline_output_model_5m = [
                 {
                     "$match": {
+                        "sender": {"$ne": "User"},
                         "tokenCount": {"$exists": True, "$ne": None},
                         "model": {"$exists": True, "$ne": None},
                         "createdAt": {"$gte": five_minutes_ago},
@@ -691,12 +726,54 @@ class LibreChatMetricsCollector(Collector):
                 },
                 {
                     "$group": {
-                        "_id": {"model": "$model", "sender": "$sender"},
+                        "_id": "$model",
                         "totalTokens": {"$sum": "$tokenCount"},
                     }
                 },
             ]
-            results_model_tokens_5m = self.messages_collection.aggregate(pipeline_model_tokens_5m)
+
+            # Per-model input token counts (5m) - User messages typically don't have
+            # the model field, so we resolve the model via conversationId from
+            # assistant messages in the same time window.
+
+            # Step 1: Get conversation → model mapping from assistant messages
+            pipeline_conv_model_5m = [
+                {
+                    "$match": {
+                        "sender": {"$ne": "User"},
+                        "model": {"$exists": True, "$ne": None},
+                        "createdAt": {"$gte": five_minutes_ago},
+                    }
+                },
+                {"$sort": {"createdAt": -1}},
+                {
+                    "$group": {
+                        "_id": "$conversationId",
+                        "model": {"$first": "$model"},
+                    }
+                },
+            ]
+
+            # Step 2: Get user tokens per conversation
+            pipeline_user_tokens_5m = [
+                {
+                    "$match": {
+                        "sender": "User",
+                        "tokenCount": {"$exists": True, "$ne": None},
+                        "createdAt": {"$gte": five_minutes_ago},
+                    }
+                },
+                {
+                    "$group": {
+                        "_id": "$conversationId",
+                        "totalTokens": {"$sum": "$tokenCount"},
+                    }
+                },
+            ]
+
+            results_output_model_5m = list(self.messages_collection.aggregate(pipeline_output_model_5m))
+            results_conv_model_5m = list(self.messages_collection.aggregate(pipeline_conv_model_5m))
+            results_user_tokens_5m = list(self.messages_collection.aggregate(pipeline_user_tokens_5m))
 
             input_metric_5m = GaugeMetricFamily(
                 "librechat_model_input_tokens_5m",
@@ -710,26 +787,36 @@ class LibreChatMetricsCollector(Collector):
                 labels=["model"],
             )
 
-            model_tokens_map = {}
-            for result in results_model_tokens_5m:
-                model = result["_id"]["model"] or "unknown"
-                sender_type = result["_id"]["sender"]
-                tokens = result["totalTokens"]
+            # Build conversation → model map
+            conv_model_map = {}
+            for result in results_conv_model_5m:
+                conv_id = result["_id"]
+                if conv_id is not None:
+                    conv_model_map[conv_id] = result["model"] or "unknown"
 
-                if model not in model_tokens_map:
-                    model_tokens_map[model] = {"input": 0, "output": 0}
+            # Aggregate input tokens per model using conversation → model mapping
+            model_input_tokens = {}
+            for result in results_user_tokens_5m:
+                conv_id = result["_id"]
+                model = conv_model_map.get(conv_id, "unknown")
+                model_input_tokens[model] = model_input_tokens.get(model, 0) + result["totalTokens"]
 
-                if sender_type == "User":
-                    model_tokens_map[model]["input"] += tokens
-                else:
-                    model_tokens_map[model]["output"] += tokens
+            # Aggregate output tokens per model
+            model_output_tokens = {}
+            for result in results_output_model_5m:
+                model = result["_id"] or "unknown"
+                model_output_tokens[model] = model_output_tokens.get(model, 0) + result["totalTokens"]
 
-            for model, counts in model_tokens_map.items():
-                input_metric_5m.add_metric([model], counts["input"])
-                output_metric_5m.add_metric([model], counts["output"])
+            # Combine all models from both input and output
+            all_models = set(model_input_tokens.keys()) | set(model_output_tokens.keys())
+            for model in all_models:
+                input_count = model_input_tokens.get(model, 0)
+                output_count = model_output_tokens.get(model, 0)
+                input_metric_5m.add_metric([model], input_count)
+                output_metric_5m.add_metric([model], output_count)
                 logger.debug(
                     "Model %s tokens in last 5 minutes: input=%s, output=%s",
-                    model, counts["input"], counts["output"]
+                    model, input_count, output_count
                 )
 
             yield input_metric_5m
