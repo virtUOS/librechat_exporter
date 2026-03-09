@@ -1513,7 +1513,7 @@ class LibreChatMetricsCollector(Collector):
             metric = GaugeMetricFamily(
                 "librechat_tool_calls_per_endpoint",
                 "Number of tool calls per endpoint and tool combination",
-                labels=["endpoint", "tool_name"],
+                labels=["api_endpoint", "tool_name"],
             )
 
             for (endpoint, tool), count in data.items():
