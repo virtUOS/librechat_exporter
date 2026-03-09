@@ -1175,7 +1175,7 @@ class LibreChatMetricsCollector(Collector):
             # Query 2: Tool calls per tool name
             per_tool_pipeline = [
                 {"$unwind": "$content"},
-                {"$match": {"content.type": "tool_call"}},
+                {"$match": {"content.type": "tool_call", "content.tool_call.name": {"$exists": True}}},
                 {"$group": {"_id": "$content.tool_call.name", "count": {"$sum": 1}}}
             ]
             for item in self.messages_collection.aggregate(per_tool_pipeline):
@@ -1188,6 +1188,7 @@ class LibreChatMetricsCollector(Collector):
                 {
                     "$match": {
                         "content.type": "tool_call",
+                        "content.tool_call.name": {"$exists": True},
                         "model": {"$exists": True, "$ne": None}
                     }
                 },
@@ -1199,8 +1200,8 @@ class LibreChatMetricsCollector(Collector):
                 }
             ]
             for item in self.messages_collection.aggregate(per_model_pipeline):
-                model = item['_id']['model'] or 'unknown'
-                tool = item['_id']['tool'] or 'unknown'
+                model = item['_id'].get('model') or 'unknown'
+                tool = item['_id'].get('tool') or 'unknown'
                 key = (model, tool)
                 cache['per_model'][key] = item['count']
 
@@ -1210,6 +1211,7 @@ class LibreChatMetricsCollector(Collector):
                 {
                     "$match": {
                         "content.type": "tool_call",
+                        "content.tool_call.name": {"$exists": True},
                         "endpoint": {"$exists": True, "$ne": None}
                     }
                 },
@@ -1221,8 +1223,8 @@ class LibreChatMetricsCollector(Collector):
                 }
             ]
             for item in self.messages_collection.aggregate(per_endpoint_pipeline):
-                endpoint = item['_id']['endpoint'] or 'unknown'
-                tool = item['_id']['tool'] or 'unknown'
+                endpoint = item['_id'].get('endpoint') or 'unknown'
+                tool = item['_id'].get('tool') or 'unknown'
                 key = (endpoint, tool)
                 cache['per_endpoint'][key] = item['count']
 
@@ -1232,6 +1234,7 @@ class LibreChatMetricsCollector(Collector):
                 {
                     "$match": {
                         "content.type": "tool_call",
+                        "content.tool_call.name": {"$exists": True},
                         "content.tool_call.output": {"$regex": "Error processing tool", "$options": "i"}
                     }
                 },
@@ -1271,7 +1274,7 @@ class LibreChatMetricsCollector(Collector):
             per_tool_5m_pipeline = [
                 {"$match": {"updatedAt": {"$gte": five_minutes_ago}}},
                 {"$unwind": "$content"},
-                {"$match": {"content.type": "tool_call"}},
+                {"$match": {"content.type": "tool_call", "content.tool_call.name": {"$exists": True}}},
                 {"$group": {"_id": "$content.tool_call.name", "count": {"$sum": 1}}}
             ]
             for item in self.messages_collection.aggregate(per_tool_5m_pipeline):
