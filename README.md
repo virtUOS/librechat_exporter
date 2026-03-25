@@ -519,6 +519,7 @@ python export_metrics.py --days 30 --cleanup
 
 # Debug mode - see detailed processing information
 python export_metrics.py --days 7 --verbose
+```
 
 #### Sync Behavior
 
