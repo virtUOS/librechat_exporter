@@ -34,7 +34,7 @@ jobs:
           images: ghcr.io/${{ github.repository }}
 
       - name: Build and push Docker images
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           platforms: linux/amd64,linux/arm64
