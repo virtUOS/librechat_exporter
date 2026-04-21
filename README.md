@@ -433,6 +433,12 @@ Query the metrics endpoint:
 curl -sf http://localhost:8000
 ```
 
+### Grafana Dashboard (Prometheus)
+
+A starter Grafana dashboard for the real-time Prometheus metrics is provided at [prometheus-dev/Grafana-Dashboard-template.json](prometheus-dev/Grafana-Dashboard-template.json). It covers the main features: users (active / daily / weekly / monthly unique), messages and tokens (totals and 5m rates, per model), ratings (thumbs up/down, per-model rating ratio) and tool usage (calls, errors, success rate per tool).
+
+To import it, open Grafana → **Dashboards** → **New** → **Import**, upload the JSON, and select your Prometheus datasource when prompted.
+
 ## Historical Metrics Analysis
 
 In addition to real-time metrics monitoring, this tool supports historical analysis of LibreChat metrics using MariaDB and Grafana.
