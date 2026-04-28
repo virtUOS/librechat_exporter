@@ -23,7 +23,7 @@
     {
       "datasource": {
         "type": "mysql",
-        "uid": "ffg6xzj7y65moc"
+        "uid": "bfgz13n0libk0c"
       },
       "description": "messages | tokens on a day, divided by users on a day",
       "fieldConfig": {
@@ -182,7 +182,7 @@
     {
       "datasource": {
         "type": "mysql",
-        "uid": "ffg6xzj7y65moc"
+        "uid": "bfgz13n0libk0c"
       },
       "description": "model error count",
       "fieldConfig": {
@@ -197,7 +197,7 @@
             "axisLabel": "",
             "axisPlacement": "auto",
             "fillOpacity": 80,
-            "gradientMode": "hue",
+            "gradientMode": "none",
             "hideFrom": {
               "legend": false,
               "tooltip": false,
@@ -338,9 +338,325 @@
     {
       "datasource": {
         "type": "mysql",
-        "uid": "ffg6xzj7y65moc"
+        "uid": "bfgz13n0libk0c"
       },
-      "description": "model token input",
+      "description": "5 users with top token usage",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "fillOpacity": 80,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "lineWidth": 1,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "fieldMinMax": false,
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": 0
+              },
+              {
+                "color": "red",
+                "value": 80
+              }
+            ]
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "(input_tokens + output_tokens)"
+            },
+            "properties": [
+              {
+                "id": "max"
+              },
+              {
+                "id": "noValue",
+                "value": "0"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "time"
+            },
+            "properties": [
+              {
+                "id": "max",
+                "value": 40000
+              }
+            ]
+          }
+        ]
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 24,
+        "x": 0,
+        "y": 18
+      },
+      "id": 8,
+      "options": {
+        "barRadius": 0,
+        "barWidth": 0.97,
+        "fullHighlight": false,
+        "groupWidth": 0.7,
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "orientation": "auto",
+        "showValue": "auto",
+        "stacking": "none",
+        "tooltip": {
+          "hideZeros": false,
+          "mode": "single",
+          "sort": "none"
+        },
+        "xTickLabelRotation": 0,
+        "xTickLabelSpacing": 0
+      },
+      "pluginVersion": "12.4.1",
+      "targets": [
+        {
+          "dataset": "metrics",
+          "datasource": {
+            "type": "mysql",
+            "uid": "del9ptig4u39cf"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT\n    user,\n    SUM(input_tokens) AS input_tokens,\n    SUM(output_tokens) AS output_tokens,\n    SUM(input_tokens + output_tokens) AS total_tokens\nFROM daily_tokens_by_user\nWHERE $__timeFilter(date)\nGROUP BY user\nORDER BY total_tokens DESC\nLIMIT 5",
+          "refId": "A",
+          "sql": {
+            "columns": [
+              {
+                "parameters": [],
+                "type": "function"
+              }
+            ],
+            "groupBy": [
+              {
+                "property": {
+                  "type": "string"
+                },
+                "type": "groupBy"
+              }
+            ],
+            "limit": 50
+          }
+        }
+      ],
+      "title": "user token podium",
+      "transformations": [
+        {
+          "id": "partitionByValues",
+          "options": {
+            "fields": [
+              "model"
+            ],
+            "keepFields": false,
+            "naming": {
+              "asLabels": true
+            }
+          }
+        }
+      ],
+      "type": "barchart"
+    },
+    {
+      "datasource": {
+        "type": "mysql",
+        "uid": "bfgz13n0libk0c"
+      },
+      "description": "5 users with top token usage",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "barWidthFactor": 0.6,
+            "drawStyle": "bars",
+            "fillOpacity": 100,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "auto",
+            "showValues": false,
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "normal"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "fieldMinMax": false,
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": 0
+              },
+              {
+                "color": "red",
+                "value": 80
+              }
+            ]
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "(input_tokens + output_tokens)"
+            },
+            "properties": [
+              {
+                "id": "max"
+              },
+              {
+                "id": "noValue",
+                "value": "0"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "time"
+            },
+            "properties": [
+              {
+                "id": "max",
+                "value": 40000
+              }
+            ]
+          }
+        ]
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 24,
+        "x": 0,
+        "y": 27
+      },
+      "id": 9,
+      "options": {
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "hideZeros": false,
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "pluginVersion": "12.4.1",
+      "targets": [
+        {
+          "dataset": "metrics",
+          "datasource": {
+            "type": "mysql",
+            "uid": "del9ptig4u39cf"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT \n    date as time,\n    user,\n    input_tokens + output_tokens\nFROM daily_tokens_by_user\nWHERE $__timeFilter(date)\nORDER BY time",
+          "refId": "A",
+          "sql": {
+            "columns": [
+              {
+                "parameters": [],
+                "type": "function"
+              }
+            ],
+            "groupBy": [
+              {
+                "property": {
+                  "type": "string"
+                },
+                "type": "groupBy"
+              }
+            ],
+            "limit": 50
+          }
+        }
+      ],
+      "title": "user token usage",
+      "transformations": [
+        {
+          "id": "partitionByValues",
+          "options": {
+            "fields": [
+              "user"
+            ],
+            "keepFields": false,
+            "naming": {
+              "asLabels": true
+            }
+          }
+        }
+      ],
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "mysql",
+        "uid": "bfgz13n0libk0c"
+      },
+      "description": "adds input and output tokens of all models used",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -355,8 +671,8 @@
             "axisPlacement": "left",
             "barAlignment": 0,
             "barWidthFactor": 0.6,
-            "drawStyle": "line",
-            "fillOpacity": 0,
+            "drawStyle": "bars",
+            "fillOpacity": 100,
             "gradientMode": "none",
             "hideFrom": {
               "legend": false,
@@ -447,9 +763,186 @@
         "h": 9,
         "w": 24,
         "x": 0,
-        "y": 18
+        "y": 36
       },
       "id": 5,
+      "options": {
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "hideZeros": false,
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "pluginVersion": "12.4.1",
+      "targets": [
+        {
+          "dataset": "metrics",
+          "datasource": {
+            "type": "mysql",
+            "uid": "del9ptig4u39cf"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT \n    date as time,\n    SUM(input_tokens + output_tokens) AS total_tokens\nFROM daily_tokens_by_model\nWHERE $__timeFilter(date)\nGROUP BY date\nORDER BY time",
+          "refId": "A",
+          "sql": {
+            "columns": [
+              {
+                "parameters": [],
+                "type": "function"
+              }
+            ],
+            "groupBy": [
+              {
+                "property": {
+                  "type": "string"
+                },
+                "type": "groupBy"
+              }
+            ],
+            "limit": 50
+          }
+        }
+      ],
+      "title": "all model token usage",
+      "transformations": [
+        {
+          "id": "partitionByValues",
+          "options": {
+            "fields": [
+              "model"
+            ],
+            "keepFields": false,
+            "naming": {
+              "asLabels": true
+            }
+          }
+        }
+      ],
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "mysql",
+        "uid": "bfgz13n0libk0c"
+      },
+      "description": "model token input",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisGridShow": true,
+            "axisLabel": "",
+            "axisPlacement": "left",
+            "barAlignment": 0,
+            "barWidthFactor": 0.6,
+            "drawStyle": "bars",
+            "fillOpacity": 100,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "auto",
+            "showValues": false,
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "normal"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "fieldMinMax": false,
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": 0
+              },
+              {
+                "color": "red",
+                "value": 80
+              }
+            ]
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "(input_tokens + output_tokens)"
+            },
+            "properties": [
+              {
+                "id": "custom.axisPlacement",
+                "value": "auto"
+              },
+              {
+                "id": "custom.axisLabel",
+                "value": "tokens"
+              },
+              {
+                "id": "max"
+              },
+              {
+                "id": "noValue",
+                "value": "0"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "time"
+            },
+            "properties": [
+              {
+                "id": "custom.axisPlacement",
+                "value": "auto"
+              },
+              {
+                "id": "custom.axisLabel",
+                "value": "time"
+              },
+              {
+                "id": "max",
+                "value": 40000
+              }
+            ]
+          }
+        ]
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 24,
+        "x": 0,
+        "y": 45
+      },
+      "id": 6,
       "options": {
         "legend": {
           "calcs": [],
@@ -515,7 +1008,7 @@
     {
       "datasource": {
         "type": "mysql",
-        "uid": "ffg6xzj7y65moc"
+        "uid": "bfgz13n0libk0c"
       },
       "description": "model token output",
       "fieldConfig": {
@@ -532,8 +1025,8 @@
             "axisPlacement": "left",
             "barAlignment": 0,
             "barWidthFactor": 0.6,
-            "drawStyle": "line",
-            "fillOpacity": 0,
+            "drawStyle": "bars",
+            "fillOpacity": 100,
             "gradientMode": "none",
             "hideFrom": {
               "legend": false,
@@ -552,7 +1045,7 @@
             "spanNulls": false,
             "stacking": {
               "group": "A",
-              "mode": "none"
+              "mode": "normal"
             },
             "thresholdsStyle": {
               "mode": "off"
@@ -624,9 +1117,9 @@
         "h": 9,
         "w": 24,
         "x": 0,
-        "y": 27
+        "y": 54
       },
-      "id": 6,
+      "id": 10,
       "options": {
         "legend": {
           "calcs": [],
@@ -692,7 +1185,7 @@
     {
       "datasource": {
         "type": "mysql",
-        "uid": "ffg6xzj7y65moc"
+        "uid": "bfgz13n0libk0c"
       },
       "description": "a user who has had at least one conversation on a day",
       "fieldConfig": {
@@ -755,7 +1248,7 @@
         "h": 8,
         "w": 24,
         "x": 0,
-        "y": 36
+        "y": 63
       },
       "id": 1,
       "options": {
@@ -824,7 +1317,7 @@
     {
       "datasource": {
         "type": "mysql",
-        "uid": "ffg6xzj7y65moc"
+        "uid": "bfgz13n0libk0c"
       },
       "description": "a user who has had at least one conversation on a week",
       "fieldConfig": {
@@ -887,7 +1380,7 @@
         "h": 7,
         "w": 24,
         "x": 0,
-        "y": 44
+        "y": 71
       },
       "id": 2,
       "options": {
@@ -952,7 +1445,7 @@
     {
       "datasource": {
         "type": "mysql",
-        "uid": "ffg6xzj7y65moc"
+        "uid": "bfgz13n0libk0c"
       },
       "description": "a user who has had at least one conversation on a month",
       "fieldConfig": {
@@ -1015,7 +1508,7 @@
         "h": 7,
         "w": 24,
         "x": 0,
-        "y": 51
+        "y": 78
       },
       "id": 3,
       "options": {
@@ -1085,13 +1578,13 @@
     "list": []
   },
   "time": {
-    "from": "2025-12-31T23:00:00.000Z",
-    "to": "2026-03-31T21:59:59.000Z"
+    "from": "now-90d",
+    "to": "now"
   },
   "timepicker": {},
   "timezone": "utc",
   "title": "eval over time",
   "uid": "c112eace-b4de-4d61-b945-ae8153d02fca",
-  "version": 9,
+  "version": 6,
   "weekStart": ""
 }
