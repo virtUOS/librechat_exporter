@@ -440,10 +440,8 @@ class MetricsCalculator:
                     
                     for ai_msg in ai_responses:
                         tokens_by_model[ai_msg['model']]['input'] += token_count
-                    
-                    # Attribute to user ONCE (not per regeneration) — or keep N× if cost-based
-                    if user and ai_responses:
-                        tokens_by_user[user]['input'] += token_count
+                        if user and ai_responses:
+                            tokens_by_user[user]['input'] += token_count
 
                 elif message.get('model'):
                     tokens_by_model[model_name]['output'] += token_count
@@ -542,7 +540,7 @@ class MetricsExporter:
     def process_daily_metrics(self, date, all_messages, all_conversations):
         """Process metrics for a single day using pre-loaded data"""
         logger.info(f"Processing daily metrics for {date}")
-        
+
         # Filter data for this specific date
         messages = self.filter.filter_by_date(all_messages, date)
         conversations = self.filter.filter_by_date(all_conversations, date)
