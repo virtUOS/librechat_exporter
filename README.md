@@ -482,30 +482,118 @@ Refer to [Install Dependencies](#2-install-dependencies) section above for setti
 
 The `export_metrics.py` script extracts historical data from MongoDB and loads it into MariaDB for analysis:
 
+#### Basic Usage
+
 ```bash
-python export_metrics.py YYYY-MM-DD YYYY-MM-DD
+# Default: Incremental sync of past 30 days
+python export_metrics.py
+
+# Specific date range
+python export_metrics.py --start-date YYYY-MM-DD --end-date YYYY-MM-DD
+
+# Lookback period
+python export_metrics.py --days N
 ```
 
-Replace the date arguments with the start and end dates for your analysis period.
+#### Command-Line Options
 
-Example:
+| Option | Description | Default |
+|--------|-------------|---------|
+| `--start-date YYYY-MM-DD` | Start date for metrics export | N days ago (based on `--days`) |
+| `--end-date YYYY-MM-DD` | End date for metrics export | Yesterday |
+| `--days N` | Number of days to look back | 30 |
+| `--force` | Re-process all dates, even if data exists | False |
+| `--cleanup` | Delete all data outside the specified date range | False |
+| `--verbose` / `-v` | Enable detailed debug logging | False |
+
+**Note:** `--start-date` and `--end-date` must be used together.
+
+#### Examples
+
 ```bash
-# Export metrics from January 1, 2024 to April 30, 2024
-python export_metrics.py 2024-01-01 2024-04-30
+# Initial sync - export metrics from January 1, 2024 to April 30, 2024
+python export_metrics.py --start-date 2024-01-01 --end-date 2024-04-30
+
+# Incremental sync - only process missing dates from last 90 days
+python export_metrics.py --days 90
+
+# Force re-sync - re-process last 30 days even if data exists
+python export_metrics.py --days 30 --force
+
+# Maintain rolling 30-day window - sync and delete data outside this range
+python export_metrics.py --days 30 --cleanup
+
+# Debug mode - see detailed processing information
+python export_metrics.py --days 7 --verbose
 ```
+#### Sync Behavior
+
+**Incremental Sync (Default):**
+The script only processes dates that are missing from MariaDB, making it efficient for daily updates.
+
+**Force Sync (`--force`):**
+Re-calculates metrics for all dates in the range, even if data already exists. Use this when:
+- Fixing data inconsistencies
+- After changing metric calculation logic
+- Recovering from errors
+
+**Cleanup Mode (`--cleanup`):**
+Deletes all data outside the specified date range. Useful for:
+- Maintaining a rolling retention window
+- Limiting database growth
+- **Warning:** This permanently deletes data outside your range
+
+### What Gets Exported
 
 The script will:
-1. Clear existing metrics tables in MariaDB
-2. Calculate daily metrics for each day in the specified range
-3. Calculate weekly metrics (on Sundays)
-4. Calculate monthly metrics (on the last day of each month)
+1. Connect to MongoDB and MariaDB
+2. Check which dates already have data (unless `--force` is used)
+3. Calculate daily metrics for each day in the specified range
+4. Calculate weekly metrics (on Sundays)
+5. Calculate monthly metrics (on the last day of each month)
+6. Optionally delete data outside the date range (if `--cleanup` is used)
 
 The metrics include:
 - Unique users per day/week/month
 - Total messages and conversations
 - Message counts by model
-- Token usage by model
+- Token usage by model (input and output)
 - Error counts by model
+
+### Migration Notes
+
+If you were running a previous version of the export script, you should run
+`python export_metrics.py --force --cleanup` once to rebuild your data.
+
+**Before re-syncing, create the new `daily_tokens_by_user` table** (only
+required if your MariaDB volume was initialized by an older `init.sql`):
+
+```sql
+CREATE TABLE IF NOT EXISTS daily_tokens_by_user (
+    date DATE,
+    user VARCHAR(255),
+    input_tokens INT NOT NULL,
+    output_tokens INT NOT NULL,
+    PRIMARY KEY (date, user)
+);
+```
+
+Key changes that require a re-sync:
+
+- New daily_tokens_by_user table — per-user input/output token totals per day, enabling top-user leaderboards and per-user cost attribution in Grafana.
+- daily_messages_by_model no longer includes user-sent messages — it now counts only assistant/model responses, giving a more accurate picture of model usage.
+- Input token attribution now accounts for regenerations: if a user message was regenerated N times, input tokens are counted N× (once per AI reply), matching actual provider billing. Previous versions counted input tokens only once regardless of regenerations.
+- Daily unique user counts may shift slightly due to refined counting logic.
+
+#### Grafana Dashboard
+The dashboard template has been updated to include the new per-user token
+panels. Re-import the provided dashboard JSON (or add the panels manually)
+to get:
+
+- Updated model input and output pannels
+- Top 10 users by total tokens (time series) — who's driving usage day over day.
+- user token count — per-user input / output / total tokens for the selected time range.
+
 
 ### Viewing Metrics in Grafana
 
