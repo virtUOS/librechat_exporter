@@ -520,7 +520,6 @@ python export_metrics.py --days 30 --cleanup
 # Debug mode - see detailed processing information
 python export_metrics.py --days 7 --verbose
 ```
-
 #### Sync Behavior
 
 **Incremental Sync (Default):**
@@ -554,6 +553,40 @@ The metrics include:
 - Message counts by model
 - Token usage by model (input and output)
 - Error counts by model
+
+### Migration Notes
+
+If you were running a previous version of the export script, you should run
+`python export_metrics.py --force --cleanup` once to rebuild your data.
+
+**Before re-syncing, create the new `daily_tokens_by_user` table** (only
+required if your MariaDB volume was initialized by an older `init.sql`):
+
+```sql
+CREATE TABLE IF NOT EXISTS daily_tokens_by_user (
+    date DATE,
+    user VARCHAR(255),
+    input_tokens INT NOT NULL,
+    output_tokens INT NOT NULL,
+    PRIMARY KEY (date, user)
+);
+```
+
+Key changes that require a re-sync:
+
+- New daily_tokens_by_user table — per-user input/output token totals per day, enabling top-user leaderboards and per-user cost attribution in Grafana.
+- daily_messages_by_model no longer includes user-sent messages — it now counts only assistant/model responses, giving a more accurate picture of model usage.
+- Input token attribution now accounts for regenerations: if a user message was regenerated N times, input tokens are counted N× (once per AI reply), matching actual provider billing. Previous versions counted input tokens only once regardless of regenerations.
+- Daily unique user counts may shift slightly due to refined counting logic.
+
+#### Grafana Dashboard
+The dashboard template has been updated to include the new per-user token
+panels. Re-import the provided dashboard JSON (or add the panels manually)
+to get:
+
+- Updated model input and output pannels
+- Top 10 users by total tokens (time series) — who's driving usage day over day.
+- user token count — per-user input / output / total tokens for the selected time range.
 
 
 ### Viewing Metrics in Grafana
