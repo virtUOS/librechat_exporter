@@ -109,6 +109,7 @@ class MariaDBManager:
         'daily_messages',
         'daily_messages_by_model',
         'daily_tokens_by_model',
+        'daily_tokens_by_user',
         'daily_errors_by_model'
     ]
     
@@ -290,6 +291,16 @@ class MariaDBManager:
                             output_tokens = VALUES(output_tokens)
                     """, (date, model, tokens['input'], tokens['output']))
                 
+                # Tokens by user
+                for user, tokens in metrics['tokens_by_user'].items():
+                    cursor.execute("""
+                        INSERT INTO daily_tokens_by_user (date, user, input_tokens, output_tokens)
+                        VALUES (%s, %s, %s, %s)
+                        ON DUPLICATE KEY UPDATE
+                            input_tokens = VALUES(input_tokens),
+                            output_tokens = VALUES(output_tokens)
+                    """, (date, user, tokens['input'], tokens['output']))
+                
                 # Errors by model
                 for model, count in metrics['errors_by_model'].items():
                     cursor.execute("""
@@ -359,7 +370,6 @@ class DataFilter:
             if item.get('createdAt') and start_time <= item['createdAt'] <= end_time
         ]
 
-
 # ============================================================================
 # Metrics Calculation
 # ============================================================================
@@ -376,6 +386,7 @@ class MetricsCalculator:
         
         messages_by_model = defaultdict(int)
         tokens_by_model = defaultdict(lambda: {'input': 0, 'output': 0})
+        tokens_by_user = defaultdict(lambda: {'input': 0, 'output': 0})
         errors_by_model = defaultdict(int)
 
         # Build a parentMessageId → [ai_response, ...] index once,
@@ -387,6 +398,16 @@ class MetricsCalculator:
                     and msg.get('model')
                     and msg.get('parentMessageId')):
                 ai_responses_by_parent[msg['parentMessageId']].append(msg)
+
+        # Build a messageId → user index so AI-response output tokens
+        # can be attributed back to the user who sent the parent message.
+        user_by_message_id = {}
+        for msg in allmessages:
+            if (msg.get('isCreatedByUser')
+                    and msg.get('messageId')
+                    and msg.get('user')):
+                user_by_message_id[msg['messageId']] = msg['user']
+
 
         for message in messages:
             model_name = message.get('model') or 'unknown'
@@ -401,19 +422,27 @@ class MetricsCalculator:
 
                 elif message.get('isCreatedByUser'):
                     user_msg_id = message.get('messageId')
-                    if user_msg_id:
-                        # Attribute input tokens to each model that responded.
-                        # Input tokens are counted once per AI reply, so N
-                        # regenerations multiply input token cost N×.  This is
-                        # intentional: every regeneration incurs a real API call
-                        # and thus a real input-token charge.
-                        for ai_msg in ai_responses_by_parent.get(user_msg_id, ()):
-                            ai_model = ai_msg['model']
-                            tokens_by_model[ai_model]['input'] += token_count
+                    user = message.get('user')
+                    ai_responses = ai_responses_by_parent.get(user_msg_id, ())
+                    
+                    for ai_msg in ai_responses:
+                        tokens_by_model[ai_msg['model']]['input'] += token_count
+                    
+                    # Attribute to user ONCE (not per regeneration) — or keep N× if cost-based
+                    if user and ai_responses:
+                        tokens_by_user[user]['input'] += token_count
 
                 elif message.get('model'):
                     tokens_by_model[model_name]['output'] += token_count
                     messages_by_model[model_name] += 1
+
+                    # Attribute output tokens back to the user who
+                    # sent the parent message.
+                    parent_id = message.get('parentMessageId')
+                    if parent_id:
+                        user = user_by_message_id.get(parent_id)
+                        if user:
+                            tokens_by_user[user]['output'] += token_count
             
             # Error counts
             if message.get('error'):
@@ -425,6 +454,7 @@ class MetricsCalculator:
             'total_conversations': total_conversations,
             'messages_by_model': dict(messages_by_model),
             'tokens_by_model': dict(tokens_by_model),
+            'tokens_by_user': dict(tokens_by_user),
             'errors_by_model': dict(errors_by_model)
         }
     
