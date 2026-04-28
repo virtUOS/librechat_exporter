@@ -376,9 +376,41 @@ class DataFilter:
 
 class MetricsCalculator:
     """Calculates metrics from raw data"""
+
+    def __init__(self):
+        self._ai_responses_by_parent = defaultdict(list)
+        self._user_by_message_id = {}
     
-    @staticmethod
-    def calculate_daily_metrics(messages, conversations, allmessages):
+    def prepare(self, allmessages):
+        """
+        Build per-sync lookup indexes.  Must be called once before
+        calculate_daily_metrics() whenever the underlying allmessages
+        set changes.
+        """
+
+        # Build a parentMessageId → [ai_response, ...] index once,
+        # so user-message token attribution is O(1) per lookup
+        # instead of O(len(allmessages)) per user message.
+        ai_responses_by_parent = defaultdict(list)
+
+        # Build a messageId → user index so AI-response output tokens
+        # can be attributed back to the user who sent the parent message.
+        user_by_message_id = {}
+        
+        for msg in allmessages:
+            if msg.get('isCreatedByUser'):
+                msg_id = msg.get('messageId')
+                user = msg.get('user')
+                if msg_id and user:
+                    user_by_message_id[msg_id] = user
+            elif msg.get('model') and msg.get('parentMessageId'):
+                ai_responses_by_parent[msg['parentMessageId']].append(msg)
+        
+        self._ai_responses_by_parent = ai_responses_by_parent
+        self._user_by_message_id = user_by_message_id
+
+
+    def calculate_daily_metrics(self, messages, conversations):
         """Calculate daily metrics from messages and conversations"""
         unique_users = MetricsCalculator.calculate_unique_users(messages)
         total_messages = len(messages)
@@ -388,25 +420,6 @@ class MetricsCalculator:
         tokens_by_model = defaultdict(lambda: {'input': 0, 'output': 0})
         tokens_by_user = defaultdict(lambda: {'input': 0, 'output': 0})
         errors_by_model = defaultdict(int)
-
-        # Build a parentMessageId → [ai_response, ...] index once,
-        # so user-message token attribution is O(1) per lookup
-        # instead of O(len(allmessages)) per user message.
-        ai_responses_by_parent = defaultdict(list)
-        for msg in allmessages:
-            if (not msg.get('isCreatedByUser')
-                    and msg.get('model')
-                    and msg.get('parentMessageId')):
-                ai_responses_by_parent[msg['parentMessageId']].append(msg)
-
-        # Build a messageId → user index so AI-response output tokens
-        # can be attributed back to the user who sent the parent message.
-        user_by_message_id = {}
-        for msg in allmessages:
-            if (msg.get('isCreatedByUser')
-                    and msg.get('messageId')
-                    and msg.get('user')):
-                user_by_message_id[msg['messageId']] = msg['user']
 
 
         for message in messages:
@@ -423,7 +436,7 @@ class MetricsCalculator:
                 elif message.get('isCreatedByUser'):
                     user_msg_id = message.get('messageId')
                     user = message.get('user')
-                    ai_responses = ai_responses_by_parent.get(user_msg_id, ())
+                    ai_responses = self._ai_responses_by_parent.get(user_msg_id, ())
                     
                     for ai_msg in ai_responses:
                         tokens_by_model[ai_msg['model']]['input'] += token_count
@@ -440,7 +453,7 @@ class MetricsCalculator:
                     # sent the parent message.
                     parent_id = message.get('parentMessageId')
                     if parent_id:
-                        user = user_by_message_id.get(parent_id)
+                        user = self._user_by_message_id.get(parent_id)
                         if user:
                             tokens_by_user[user]['output'] += token_count
             
@@ -537,7 +550,7 @@ class MetricsExporter:
         logger.info(f"Found {len(messages)} messages, {len(conversations)} conversations")
         
         # Calculate metrics
-        metrics = self.calculator.calculate_daily_metrics(messages, conversations, all_messages)
+        metrics = self.calculator.calculate_daily_metrics(messages, conversations)
         
         logger.info(f"Metrics: {metrics['unique_users']} users, "
                    f"{metrics['total_messages']} messages, "
@@ -630,9 +643,14 @@ class MetricsExporter:
         # *** Fetch all data once ***
         logger.info(f"\n{'='*60}")
         logger.info("Fetching all data from MongoDB...")
+
         all_data = self.mongo.get_all_data(start_date, end_date)
         all_messages = all_data['messages']
         all_conversations = all_data['conversations']
+
+        # Build indexes once per sync
+        self.calculator.prepare(all_messages)
+
         logger.info("Data loaded into memory. Processing dates...")
         logger.info(f"{'='*60}\n")
         
