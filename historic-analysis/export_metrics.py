@@ -64,7 +64,7 @@ class MongoDBManager:
         try:
             self.client = pymongo.MongoClient(
                 self.config.mongodb_uri,
-                readPreference='primaryPreferred',
+                readPreference=os.getenv('MONGO_READ_PREFERENCE', 'secondaryPreferred'),
             )
             self.client.admin.command('ping')
             self.db = self.client[self.config.mongodb_database]
@@ -248,37 +248,7 @@ class MariaDBManager:
             except Exception:
                 conn.rollback()
                 raise
-    
-    def delete_future_dates(self):
-        """Delete any dates in the future (data integrity check)"""
-        today = datetime.now().date()
-        deleted_counts = {}
-        
-        with self.get_connection() as conn:
-            cursor = conn.cursor()
-            
-            try:
-                # Daily tables
-                for table in self.DAILY_TABLES:
-                    cursor.execute(f"DELETE FROM {table} WHERE date > %s", (today,))
-                    deleted_counts[table] = cursor.rowcount
-                
-                # Weekly tables
-                for table in self.WEEKLY_TABLES:
-                    cursor.execute(f"DELETE FROM {table} WHERE week_start > %s", (today,))
-                    deleted_counts[table] = cursor.rowcount
-                
-                # Monthly tables
-                for table in self.MONTHLY_TABLES:
-                    cursor.execute(f"DELETE FROM {table} WHERE month_start > %s", (today,))
-                    deleted_counts[table] = cursor.rowcount
-                
-                conn.commit()
-                return deleted_counts
-                
-            except Exception:
-                conn.rollback()
-                raise
+
     
     def store_daily_metrics(self, date, metrics):
         """Store daily metrics in database"""
@@ -382,10 +352,8 @@ class DataFilter:
     @staticmethod
     def filter_by_date_range(items, start_date, end_date):
         """Filter items by date range"""
-        #print(start_date, end_date)
         start_time = datetime.combine(start_date, datetime.min.time())
         end_time = datetime.combine(end_date, datetime.max.time())
-        #print(' ', start_date, end_date)
         return [
             item for item in items
             if item.get('createdAt') and start_time <= item['createdAt'] <= end_time
@@ -409,34 +377,39 @@ class MetricsCalculator:
         messages_by_model = defaultdict(int)
         tokens_by_model = defaultdict(lambda: {'input': 0, 'output': 0})
         errors_by_model = defaultdict(int)
-        
+
+        # Build a parentMessageId → [ai_response, ...] index once,
+        # so user-message token attribution is O(1) per lookup
+        # instead of O(len(allmessages)) per user message.
+        ai_responses_by_parent = defaultdict(list)
+        for msg in allmessages:
+            if (not msg.get('isCreatedByUser')
+                    and msg.get('model')
+                    and msg.get('parentMessageId')):
+                ai_responses_by_parent[msg['parentMessageId']].append(msg)
+
         for message in messages:
             model_name = message.get('model') or 'unknown'
-            #print('-',model_name,'tokenCount' in message)
-            #print(message)
+
             # Token counts
             if 'tokenCount' in message:
                 token_count = message.get('tokenCount', 0)
 
-                if isinstance(token_count, dict): # DEPRICATED?
+                if isinstance(token_count, dict):  # DEPRECATED?
                     tokens_by_model[model_name]['input'] += token_count.get('prompt', 0)
                     tokens_by_model[model_name]['output'] += token_count.get('completion', 0)
 
                 elif message.get('isCreatedByUser'):
-                    user_msg_id = message['messageId']
-
-                    # Find ALL AI responses (handles regenerations)
-                    ai_responses = [
-                        msg for msg in allmessages # checks in allmessages for children
-                        if (msg.get('parentMessageId') == user_msg_id and 
-                            not msg.get('isCreatedByUser') and 
-                            msg.get('model'))
-                    ]
-
-                    # Attribute input tokens to each model that responded
-                    for ai_msg in ai_responses:
-                        ai_model = ai_msg.get('model')
-                        tokens_by_model[ai_model]['input'] += token_count
+                    user_msg_id = message.get('messageId')
+                    if user_msg_id:
+                        # Attribute input tokens to each model that responded.
+                        # Input tokens are counted once per AI reply, so N
+                        # regenerations multiply input token cost N×.  This is
+                        # intentional: every regeneration incurs a real API call
+                        # and thus a real input-token charge.
+                        for ai_msg in ai_responses_by_parent.get(user_msg_id, ()):
+                            ai_model = ai_msg['model']
+                            tokens_by_model[ai_model]['input'] += token_count
 
                 elif message.get('model'):
                     tokens_by_model[model_name]['output'] += token_count
