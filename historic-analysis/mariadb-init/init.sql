@@ -1,4 +1,8 @@
--- Drop and recreate database
+-- WARNING: this script is intended for first-time MariaDB volume init only.
+-- The `mariadb-init` directory is executed by the official MariaDB image
+-- exclusively when the data directory is empty, so it is safe in that
+-- context. Do NOT run this manually against a populated volume — it will
+-- DROP the metrics database and wipe all historical data.
 DROP DATABASE IF EXISTS metrics;
 CREATE DATABASE metrics;
 CREATE USER IF NOT EXISTS 'metrics'@'%' IDENTIFIED BY 'metrics';

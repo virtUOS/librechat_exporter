@@ -437,11 +437,11 @@ class MetricsCalculator:
                     user_msg_id = message.get('messageId')
                     user = message.get('user')
                     ai_responses = self._ai_responses_by_parent.get(user_msg_id, ())
-                    
+
                     for ai_msg in ai_responses:
                         tokens_by_model[ai_msg['model']]['input'] += token_count
-                        if user and ai_responses:
-                            tokens_by_user[user]['input'] += token_count
+                    if user:
+                        tokens_by_user[user]['input'] += token_count * len(ai_responses)
 
                 elif message.get('model'):
                     tokens_by_model[model_name]['output'] += token_count
