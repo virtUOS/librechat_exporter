@@ -38,6 +38,15 @@ CREATE TABLE daily_tokens_by_model (
     PRIMARY KEY (date, model)
 );
 
+-- Table for daily tokens by user
+CREATE TABLE daily_tokens_by_user (
+    date DATE,
+    user VARCHAR(255),
+    input_tokens INT NOT NULL,
+    output_tokens INT NOT NULL,
+    PRIMARY KEY (date, user)
+);
+
 -- Table for daily errors by model
 CREATE TABLE daily_errors_by_model (
     date DATE,

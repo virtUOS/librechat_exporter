@@ -1,309 +1,776 @@
-import mysql.connector
+"""
+LibreChat Metrics Exporter
+Syncs metrics data from MongoDB to MariaDB with retention management.
+"""
+import time
+import logging
 from datetime import datetime, timedelta
-import pymongo
 from collections import defaultdict
+from contextlib import contextmanager
 import argparse
-import sys
+import os
 
-# Database connections
-try:
-    mongo_client = pymongo.MongoClient(
-        "mongodb://localhost:27017/",
-        readPreference='secondary',  # Prefer reading from secondary node
-    )
-    # Test the connection
-    mongo_client.admin.command('ping')
-    print("Successfully connected to MongoDB in read-only mode")
-except Exception as e:
-    print(f"Failed to connect to MongoDB: {e}")
-    sys.exit(1)
+import pymongo
+import mysql.connector
+from mysql.connector import Error as MySQLError
+from dotenv import load_dotenv
 
-mongo_db = mongo_client["LibreChat"]
-mysql_config = {
-    'host': 'localhost',
-    'user': 'metrics',
-    'password': 'metrics',
-    'database': 'metrics',
-    'port': 3306
-}
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S'
+)
+logger = logging.getLogger(__name__)
 
-def get_mysql_connection():
-    return mysql.connector.connect(**mysql_config)
 
-def calculate_daily_metrics(date):
-    """Calculate metrics for a specific date"""
-    print(f"\nProcessing daily metrics for {date}")
-    start_time = datetime.combine(date, datetime.min.time())
-    end_time = datetime.combine(date, datetime.max.time())
+# ============================================================================
+# Configuration
+# ============================================================================
+
+class Config:
+    """Application configuration"""
     
-    # Get messages for the day
-    messages = list(mongo_db.messages.find({
-        'createdAt': {'$gte': start_time, '$lte': end_time}
-    }))
+    def __init__(self):
+        load_dotenv()
+        self.mongodb_uri = os.getenv("MONGODB_URI", "mongodb://mongodb:27017/")
+        self.mongodb_database = os.getenv("MONGODB_DATABASE", "librechat")
+        self.mysql_host = os.getenv("MYSQL_HOST", "mariadb")
+        self.mysql_user = os.getenv("MYSQL_USER", "metrics")
+        self.mysql_password = os.getenv("MYSQL_PASSWORD", "metrics")
+        self.mysql_database = os.getenv("MYSQL_DATABASE", "metrics")
+        self.mysql_port = int(os.getenv("MYSQL_PORT", "3306"))
+        self.default_lookback_days = 30
+
+        # Retry settings for MySQL/MariaDB (can be overridden via env vars)
+        self.mysql_max_retries = int(os.getenv("MYSQL_MAX_RETRIES", "5"))
+        self.mysql_retry_delay = int(os.getenv("MYSQL_RETRY_DELAY", "5"))  # seconds
+
+
+# ============================================================================
+# Database Managers
+# ============================================================================
+
+class MongoDBManager:
+    """Manages MongoDB connections and queries"""
     
-    # Get conversations for the day
-    conversations = list(mongo_db.conversations.find({
-        'createdAt': {'$gte': start_time, '$lte': end_time}
-    }))
+    def __init__(self, config):
+        self.config = config
+        self.client = None
+        self.db = None
     
-    print(f"Found {len(messages)} messages and {len(conversations)} conversations for {date}")
+    def connect(self):
+        """Establish MongoDB connection"""
+        try:
+            self.client = pymongo.MongoClient(
+                self.config.mongodb_uri,
+                readPreference=os.getenv('MONGO_READ_PREFERENCE', 'secondaryPreferred'),
+            )
+            self.client.admin.command('ping')
+            self.db = self.client[self.config.mongodb_database]
+            logger.info("Connected to MongoDB")
+        except Exception as e:
+            logger.error(f"Failed to connect to MongoDB: {e}")
+            raise
     
-    # Calculate metrics
-    unique_users = len(set(msg.get('user') for msg in messages))
-    total_messages = len(messages)
-    total_conversations = len(conversations)
-    
-    print(f"Metrics for {date}:")
-    print(f"- Unique users: {unique_users}")
-    print(f"- Total messages: {total_messages}")
-    print(f"- Total conversations: {total_conversations}")
-    
-    # Calculate model-specific metrics
-    messages_by_model = defaultdict(int)
-    tokens_by_model = defaultdict(lambda: {'input': 0, 'output': 0})
-    errors_by_model = defaultdict(int)
-    
-    for msg in messages:
-        # Always use 'unknown' if model is None or not present
-        model = msg.get('model') or 'unknown'
-        messages_by_model[model] += 1
+    def get_all_data(self, start_date, end_date):
+        """Get all messages and conversations for the entire date range"""
+        start_time = datetime.combine(start_date, datetime.min.time())
+        end_time = datetime.combine(end_date, datetime.max.time())
         
-        # Token counts - handle both dictionary and integer values
-        if 'tokenCount' in msg:
-            token_count = msg['tokenCount']
-            if isinstance(token_count, dict):
-                tokens_by_model[model]['input'] += token_count.get('prompt', 0)
-                tokens_by_model[model]['output'] += token_count.get('completion', 0)
-            elif isinstance(token_count, int):
-                # If it's a single number, assume it's the total token count
-                tokens_by_model[model]['input'] += token_count // 2  # Split evenly between input and output
-                tokens_by_model[model]['output'] += token_count // 2
+        logger.info(f"Fetching all data from {start_time} to {end_time}...")
         
-        # Error counts
-        if msg.get('error'):
-            errors_by_model[model] += 1
+        messages = list(self.db.messages.find({
+            'createdAt': {'$gte': start_time, '$lte': end_time}
+        }))
+        
+        conversations = list(self.db.conversations.find({
+            'createdAt': {'$gte': start_time, '$lte': end_time}
+        }))
+        
+        logger.info(f"Fetched {len(messages)} messages and {len(conversations)} conversations")
+        
+        return {
+            'messages': messages,
+            'conversations': conversations
+        }
     
-    # Store metrics in MySQL
-    conn = get_mysql_connection()
-    cursor = conn.cursor()
+    def close(self):
+        """Close MongoDB connection"""
+        if self.client:
+            self.client.close()
+
+
+class MariaDBManager:
+    """Manages MariaDB/MySQL connections and operations"""
     
-    try:
-        print(f"Storing daily metrics in MySQL for {date}")
-        # Store daily users
-        cursor.execute("""
-            INSERT INTO daily_users (date, unique_users)
-            VALUES (%s, %s)
-            ON DUPLICATE KEY UPDATE
-            unique_users = VALUES(unique_users)
-        """, (date, unique_users))
-        
-        # Store daily messages
-        cursor.execute("""
-            INSERT INTO daily_messages (date, total_messages, total_conversations)
-            VALUES (%s, %s, %s)
-            ON DUPLICATE KEY UPDATE
-            total_messages = VALUES(total_messages),
-            total_conversations = VALUES(total_conversations)
-        """, (date, total_messages, total_conversations))
-        
-        # Store messages by model
-        for model, count in messages_by_model.items():
+    DAILY_TABLES = [
+        'daily_users',
+        'daily_messages',
+        'daily_messages_by_model',
+        'daily_tokens_by_model',
+        'daily_tokens_by_user',
+        'daily_errors_by_model'
+    ]
+    
+    WEEKLY_TABLES = ['weekly_users']
+    MONTHLY_TABLES = ['monthly_users']
+    
+    def __init__(self, config):
+        self.config = config
+    
+    @contextmanager
+    def get_connection(self):
+        """Context manager for database connections"""
+        conn = None
+
+        attempt = 0
+        max_retries = self.config.mysql_max_retries
+        retry_delay = self.config.mysql_retry_delay
+        while attempt <= max_retries:
+            try:
+                conn = mysql.connector.connect(
+                    host=self.config.mysql_host,
+                    user=self.config.mysql_user,
+                    password=self.config.mysql_password,
+                    database=self.config.mysql_database,
+                    port=self.config.mysql_port
+                )
+                logger.info("Connected to MariaDB/MySQL")
+                break
+            except MySQLError as e:
+                attempt += 1
+                if attempt > max_retries:
+                    logger.error(
+                        f"Failed to connect to MariaDB/MySQL after "
+                        f"{max_retries} attempts: {e}"
+                    )
+                    raise
+                logger.warning(
+                    f"MariaDB/MySQL not ready yet (attempt {attempt}/{max_retries}): {e}. "
+                    f"Retrying in {retry_delay} seconds..."
+                )
+                time.sleep(retry_delay)
+
+        try:
+            yield conn
+        finally:
+            if conn and conn.is_connected():
+                conn.close()
+                
+    
+    def get_existing_dates(self, start_date, end_date):
+        """Get all dates that already have data in MariaDB"""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
             cursor.execute("""
-                INSERT INTO daily_messages_by_model (date, model, message_count)
-                VALUES (%s, %s, %s)
-                ON DUPLICATE KEY UPDATE
-                message_count = VALUES(message_count)
-            """, (date, model, count))
-        
-        # Store tokens by model
-        for model, tokens in tokens_by_model.items():
-            cursor.execute("""
-                INSERT INTO daily_tokens_by_model (date, model, input_tokens, output_tokens)
-                VALUES (%s, %s, %s, %s)
-                ON DUPLICATE KEY UPDATE
-                input_tokens = VALUES(input_tokens),
-                output_tokens = VALUES(output_tokens)
-            """, (date, model, tokens['input'], tokens['output']))
-        
-        # Store errors by model
-        for model, count in errors_by_model.items():
-            cursor.execute("""
-                INSERT INTO daily_errors_by_model (date, model, error_count)
-                VALUES (%s, %s, %s)
-                ON DUPLICATE KEY UPDATE
-                error_count = VALUES(error_count)
-            """, (date, model, count))
-        
-        conn.commit()
-        print(f"Successfully stored daily metrics for {date}")
-    except Exception as e:
-        print(f"Error storing metrics for {date}: {e}")
-        conn.rollback()
-    finally:
-        cursor.close()
-        conn.close()
+                SELECT DISTINCT date FROM daily_users
+                WHERE date BETWEEN %s AND %s
+                ORDER BY date
+            """, (start_date, end_date))
+            return {row[0] for row in cursor.fetchall()}
+    
 
-def calculate_weekly_metrics(week_start):
-    """Calculate weekly aggregated metrics"""
-    # Skip if date is in the future
-    if week_start > datetime.now().date():
-        print(f"Skipping weekly metrics for future date: {week_start}")
-        return
+    def clear_date_range(self, start_date, end_date):
+        """Clear data for dates being re-processed"""
+        logger.info(f"Clearing data for re-processing: {start_date} to {end_date}")
+        deleted_counts = {}
         
-    week_end = week_start + timedelta(days=6)
-    
-    # Convert dates to datetime objects for MongoDB
-    start_time = datetime.combine(week_start, datetime.min.time())
-    end_time = datetime.combine(week_end, datetime.max.time())
-    
-    # Get all messages for the week
-    messages = list(mongo_db.messages.find({
-        'createdAt': {'$gte': start_time, '$lte': end_time}
-    }))
-    
-    # Calculate unique users for the week
-    unique_users = len(set(msg.get('user') for msg in messages))
-    
-    # Store in MySQL
-    conn = get_mysql_connection()
-    cursor = conn.cursor()
-    
-    try:
-        cursor.execute("""
-            INSERT INTO weekly_users (week_start, unique_users)
-            VALUES (%s, %s)
-            ON DUPLICATE KEY UPDATE
-            unique_users = VALUES(unique_users)
-        """, (week_start, unique_users))
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            
+            try:
+                # Daily tables
+                for table in self.DAILY_TABLES:
+                    cursor.execute(f"""
+                        DELETE FROM {table} 
+                        WHERE date >= %s AND date <= %s
+                    """, (start_date, end_date))
+                    deleted_counts[table] = cursor.rowcount
+                
+                # Weekly tables
+                for table in self.WEEKLY_TABLES:
+                    cursor.execute(f"""
+                        DELETE FROM {table} 
+                        WHERE week_start >= %s AND week_start <= %s
+                    """, (start_date, end_date))
+                    deleted_counts[table] = cursor.rowcount
+                
+                # Monthly tables
+                for table in self.MONTHLY_TABLES:
+                    cursor.execute(f"""
+                        DELETE FROM {table} 
+                        WHERE month_start >= %s AND month_start <= %s
+                    """, (start_date, end_date))
+                    deleted_counts[table] = cursor.rowcount
+                
+                conn.commit()
+                return deleted_counts
+                
+            except Exception:
+                conn.rollback()
+                raise
+            
+    def delete_outside_range(self, start_date, end_date):
+        """Delete data outside the specified date range"""
+        deleted_counts = {}
         
-        conn.commit()
-    except Exception as e:
-        print(f"Error storing weekly metrics for {week_start}: {e}")
-        conn.rollback()
-    finally:
-        cursor.close()
-        conn.close()
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            
+            try:
+                # Daily tables
+                for table in self.DAILY_TABLES:
+                    cursor.execute(f"""
+                        DELETE FROM {table} 
+                        WHERE date < %s OR date > %s
+                    """, (start_date, end_date))
+                    deleted_counts[table] = cursor.rowcount
+                
+                # Weekly tables
+                for table in self.WEEKLY_TABLES:
+                    cursor.execute(f"""
+                        DELETE FROM {table} 
+                        WHERE week_start < %s OR week_start > %s
+                    """, (start_date, end_date))
+                    deleted_counts[table] = cursor.rowcount
+                
+                # Monthly tables
+                for table in self.MONTHLY_TABLES:
+                    cursor.execute(f"""
+                        DELETE FROM {table} 
+                        WHERE month_start < %s OR month_start > %s
+                    """, (start_date, end_date))
+                    deleted_counts[table] = cursor.rowcount
+                
+                conn.commit()
+                return deleted_counts
+                
+            except Exception:
+                conn.rollback()
+                raise
 
-def calculate_monthly_metrics(month_start):
-    """Calculate monthly aggregated metrics"""
-    # Skip if date is in the future
-    if month_start > datetime.now().date():
-        print(f"Skipping monthly metrics for future date: {month_start}")
-        return
+    
+    def store_daily_metrics(self, date, metrics):
+        """Store daily metrics in database"""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            
+            try:
+                # Daily users
+                cursor.execute("""
+                    INSERT INTO daily_users (date, unique_users)
+                    VALUES (%s, %s)
+                    ON DUPLICATE KEY UPDATE unique_users = VALUES(unique_users)
+                """, (date, metrics['unique_users']))
+                
+                # Daily messages
+                cursor.execute("""
+                    INSERT INTO daily_messages (date, total_messages, total_conversations)
+                    VALUES (%s, %s, %s)
+                    ON DUPLICATE KEY UPDATE
+                        total_messages = VALUES(total_messages),
+                        total_conversations = VALUES(total_conversations)
+                """, (date, metrics['total_messages'], metrics['total_conversations']))
+                
+                # Messages by model
+                for model, count in metrics['messages_by_model'].items():
+                    cursor.execute("""
+                        INSERT INTO daily_messages_by_model (date, model, message_count)
+                        VALUES (%s, %s, %s)
+                        ON DUPLICATE KEY UPDATE message_count = VALUES(message_count)
+                    """, (date, model, count))
+                
+                # Tokens by model
+                for model, tokens in metrics['tokens_by_model'].items():
+                    cursor.execute("""
+                        INSERT INTO daily_tokens_by_model (date, model, input_tokens, output_tokens)
+                        VALUES (%s, %s, %s, %s)
+                        ON DUPLICATE KEY UPDATE
+                            input_tokens = VALUES(input_tokens),
+                            output_tokens = VALUES(output_tokens)
+                    """, (date, model, tokens['input'], tokens['output']))
+                
+                # Tokens by user
+                for user, tokens in metrics['tokens_by_user'].items():
+                    cursor.execute("""
+                        INSERT INTO daily_tokens_by_user (date, user, input_tokens, output_tokens)
+                        VALUES (%s, %s, %s, %s)
+                        ON DUPLICATE KEY UPDATE
+                            input_tokens = VALUES(input_tokens),
+                            output_tokens = VALUES(output_tokens)
+                    """, (date, user, tokens['input'], tokens['output']))
+                
+                # Errors by model
+                for model, count in metrics['errors_by_model'].items():
+                    cursor.execute("""
+                        INSERT INTO daily_errors_by_model (date, model, error_count)
+                        VALUES (%s, %s, %s)
+                        ON DUPLICATE KEY UPDATE error_count = VALUES(error_count)
+                    """, (date, model, count))
+                
+                conn.commit()
+                
+            except Exception:
+                conn.rollback()
+                raise
+    
+    def store_weekly_metrics(self, week_start, unique_users):
+        """Store weekly metrics in database"""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            
+            try:
+                cursor.execute("""
+                    INSERT INTO weekly_users (week_start, unique_users)
+                    VALUES (%s, %s)
+                    ON DUPLICATE KEY UPDATE unique_users = VALUES(unique_users)
+                """, (week_start, unique_users))
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
+    
+    def store_monthly_metrics(self, month_start, unique_users):
+        """Store monthly metrics in database"""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            
+            try:
+                cursor.execute("""
+                    INSERT INTO monthly_users (month_start, unique_users)
+                    VALUES (%s, %s)
+                    ON DUPLICATE KEY UPDATE unique_users = VALUES(unique_users)
+                """, (month_start, unique_users))
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
+
+
+# ============================================================================
+# Data Filtering
+# ============================================================================
+
+class DataFilter:
+    """Filters pre-loaded data by date"""
+    
+    @staticmethod
+    def filter_by_date(items, target_date):
+        """Filter items by a specific date"""
+        return DataFilter.filter_by_date_range(items, target_date, target_date)
+    
+    @staticmethod
+    def filter_by_date_range(items, start_date, end_date):
+        """Filter items by date range"""
+        start_time = datetime.combine(start_date, datetime.min.time())
+        end_time = datetime.combine(end_date, datetime.max.time())
+        return [
+            item for item in items
+            if item.get('createdAt') and start_time <= item['createdAt'] <= end_time
+        ]
+
+# ============================================================================
+# Metrics Calculation
+# ============================================================================
+
+class MetricsCalculator:
+    """Calculates metrics from raw data"""
+
+    def __init__(self):
+        self._ai_responses_by_parent = defaultdict(list)
+        self._user_by_message_id = {}
+    
+    def prepare(self, allmessages):
+        """
+        Build per-sync lookup indexes.  Must be called once before
+        calculate_daily_metrics() whenever the underlying allmessages
+        set changes.
+        """
+
+        # Build a parentMessageId → [ai_response, ...] index once,
+        # so user-message token attribution is O(1) per lookup
+        # instead of O(len(allmessages)) per user message.
+        ai_responses_by_parent = defaultdict(list)
+
+        # Build a messageId → user index so AI-response output tokens
+        # can be attributed back to the user who sent the parent message.
+        user_by_message_id = {}
         
-    if month_start.month == 12:
-        next_month = month_start.replace(year=month_start.year + 1, month=1)
-    else:
-        next_month = month_start.replace(month=month_start.month + 1)
-    month_end = next_month - timedelta(days=1)
-    
-    # Convert dates to datetime objects for MongoDB
-    start_time = datetime.combine(month_start, datetime.min.time())
-    end_time = datetime.combine(month_end, datetime.max.time())
-    
-    # Get all messages for the month
-    messages = list(mongo_db.messages.find({
-        'createdAt': {'$gte': start_time, '$lte': end_time}
-    }))
-    
-    # Calculate unique users for the month
-    unique_users = len(set(msg.get('user') for msg in messages))
-    
-    # Store in MySQL
-    conn = get_mysql_connection()
-    cursor = conn.cursor()
-    
-    try:
-        cursor.execute("""
-            INSERT INTO monthly_users (month_start, unique_users)
-            VALUES (%s, %s)
-            ON DUPLICATE KEY UPDATE
-            unique_users = VALUES(unique_users)
-        """, (month_start, unique_users))
+        for msg in allmessages:
+            if msg.get('isCreatedByUser'):
+                msg_id = msg.get('messageId')
+                user = msg.get('user')
+                if msg_id and user:
+                    user_by_message_id[msg_id] = user
+            elif msg.get('model') and msg.get('parentMessageId'):
+                ai_responses_by_parent[msg['parentMessageId']].append(msg)
         
-        conn.commit()
-    except Exception as e:
-        print(f"Error storing monthly metrics for {month_start}: {e}")
-        conn.rollback()
-    finally:
-        cursor.close()
-        conn.close()
+        self._ai_responses_by_parent = ai_responses_by_parent
+        self._user_by_message_id = user_by_message_id
+
+
+    def calculate_daily_metrics(self, messages, conversations):
+        """Calculate daily metrics from messages and conversations"""
+        unique_users = MetricsCalculator.calculate_unique_users(messages)
+        total_messages = len(messages)
+        total_conversations = len(conversations)
+        
+        messages_by_model = defaultdict(int)
+        tokens_by_model = defaultdict(lambda: {'input': 0, 'output': 0})
+        tokens_by_user = defaultdict(lambda: {'input': 0, 'output': 0})
+        errors_by_model = defaultdict(int)
+
+
+        for message in messages:
+            model_name = message.get('model') or 'unknown'
+
+            # Token counts
+            if 'tokenCount' in message:
+                token_count = message.get('tokenCount', 0)
+
+                if isinstance(token_count, dict):  # DEPRECATED?
+                    tokens_by_model[model_name]['input'] += token_count.get('prompt', 0)
+                    tokens_by_model[model_name]['output'] += token_count.get('completion', 0)
+
+                elif message.get('isCreatedByUser'):
+                    user_msg_id = message.get('messageId')
+                    user = message.get('user')
+                    ai_responses = self._ai_responses_by_parent.get(user_msg_id, ())
+                    
+                    for ai_msg in ai_responses:
+                        tokens_by_model[ai_msg['model']]['input'] += token_count
+                        if user and ai_responses:
+                            tokens_by_user[user]['input'] += token_count
+
+                elif message.get('model'):
+                    tokens_by_model[model_name]['output'] += token_count
+                    messages_by_model[model_name] += 1
+
+                    # Attribute output tokens back to the user who
+                    # sent the parent message.
+                    parent_id = message.get('parentMessageId')
+                    if parent_id:
+                        user = self._user_by_message_id.get(parent_id)
+                        if user:
+                            tokens_by_user[user]['output'] += token_count
+            
+            # Error counts
+            if message.get('error'):
+                errors_by_model[model_name] += 1
+
+        return {
+            'unique_users': unique_users,
+            'total_messages': total_messages,
+            'total_conversations': total_conversations,
+            'messages_by_model': dict(messages_by_model),
+            'tokens_by_model': dict(tokens_by_model),
+            'tokens_by_user': dict(tokens_by_user),
+            'errors_by_model': dict(errors_by_model)
+        }
+    
+    @staticmethod
+    def calculate_unique_users(messages):
+        """Calculate unique users from messages"""
+        return len({msg.get('user') for msg in messages if msg.get('isCreatedByUser')})
+
+
+# ============================================================================
+# Date Range Utilities
+# ============================================================================
+
+class DateUtils:
+    """Utilities for working with dates"""
+    
+    @staticmethod
+    def get_date_list(start_date, end_date):
+        """Generate list of dates between start and end (inclusive)"""
+        dates = []
+        current = start_date
+        while current <= end_date:
+            dates.append(current)
+            current += timedelta(days=1)
+        return dates
+    
+    @staticmethod
+    def get_missing_dates(all_dates, existing_dates):
+        """Get dates that are missing from existing dates"""
+        return [date for date in all_dates if date not in existing_dates]
+    
+    @staticmethod
+    def is_week_end(date):
+        """Check if date is end of week (Sunday)"""
+        return date.weekday() == 6
+    
+    @staticmethod
+    def is_month_end(date):
+        """Check if date is end of month"""
+        next_day = date + timedelta(days=1)
+        return date.month != next_day.month
+    
+    @staticmethod
+    def get_week_start(date):
+        """Get the Monday of the week containing this date"""
+        return date - timedelta(days=date.weekday())
+    
+    @staticmethod
+    def get_month_start(date):
+        """Get the first day of the month containing this date"""
+        return date.replace(day=1)
+
+
+# ============================================================================
+# Main Application
+# ============================================================================
+
+class MetricsExporter:
+    """Main application for exporting metrics"""
+    
+    def __init__(self, config):
+        self.config = config
+        self.mongo = MongoDBManager(config)
+        self.maria = MariaDBManager(config)
+        self.calculator = MetricsCalculator()
+        self.date_utils = DateUtils()
+        self.filter = DataFilter()
+        
+        # Cache for all data
+        self.all_data = None
+    
+    def process_daily_metrics(self, date, all_messages, all_conversations):
+        """Process metrics for a single day using pre-loaded data"""
+        logger.info(f"Processing daily metrics for {date}")
+
+        # Filter data for this specific date
+        messages = self.filter.filter_by_date(all_messages, date)
+        conversations = self.filter.filter_by_date(all_conversations, date)
+        
+        logger.info(f"Found {len(messages)} messages, {len(conversations)} conversations")
+        
+        # Calculate metrics
+        metrics = self.calculator.calculate_daily_metrics(messages, conversations)
+        
+        logger.info(f"Metrics: {metrics['unique_users']} users, "
+                   f"{metrics['total_messages']} messages, "
+                   f"{metrics['total_conversations']} conversations")
+        
+        # Store in database
+        self.maria.store_daily_metrics(date, metrics)
+        logger.info(f"Stored daily metrics for {date}")
+    
+    def process_weekly_metrics(self, week_end, all_messages):
+        """Process weekly metrics ending on given date"""
+        if week_end > datetime.now().date():
+            logger.debug(f"Skipping future date: {week_end}")
+            return
+        
+        week_start = week_end - timedelta(days=6)
+        logger.info(f"Processing weekly metrics for week {week_start} to {week_end}")
+        
+        # Filter messages for the week
+        messages = self.filter.filter_by_date_range(all_messages, week_start, week_end)
+        unique_users = self.calculator.calculate_unique_users(messages)
+        
+        self.maria.store_weekly_metrics(week_start, unique_users)
+        logger.info(f"Stored weekly metrics: {unique_users} users")
+    
+    def process_monthly_metrics(self, month_end, all_messages):
+        """Process monthly metrics for month ending on given date"""
+        if month_end > datetime.now().date():
+            logger.debug(f"Skipping future date: {month_end}")
+            return
+        
+        month_start = self.date_utils.get_month_start(month_end)
+        logger.info(f"Processing monthly metrics for {month_start.strftime('%B %Y')}")
+        
+        # Filter messages for the month
+        messages = self.filter.filter_by_date_range(all_messages, month_start, month_end)
+        unique_users = self.calculator.calculate_unique_users(messages)
+        
+        self.maria.store_monthly_metrics(month_start, unique_users)
+        logger.info(f"Stored monthly metrics: {unique_users} users")
+    
+    def cleanup_data(self, start_date, end_date):
+        """Clean up data outside retention window"""
+        logger.info(f"Cleaning up data outside {start_date} to {end_date}")
+        
+        # Clean outside range
+        deleted_counts = self.maria.delete_outside_range(start_date, end_date)
+        total_deleted = sum(deleted_counts.values())
+        
+        if total_deleted > 0:
+            logger.info(f"Cleaned up {total_deleted} records:")
+            for table, count in deleted_counts.items():
+                if count > 0:
+                    logger.info(f"  - {table}: {count} records")
+        else:
+            logger.info("No data found outside retention window")
+    
+    def sync(self, start_date, end_date, force=False, cleanup=False):
+        """Sync metrics for date range"""
+        
+        logger.info(f"Date range: {start_date} to {end_date}")
+        logger.info(f"Retention window: {(end_date - start_date).days + 1} days")
+        
+        # Cleanup if requested
+        if cleanup:
+            self.cleanup_data(start_date, end_date)
+        
+        # Determine which dates to process
+        all_dates = self.date_utils.get_date_list(start_date, end_date)
+        
+        if force:
+            logger.info("Force mode: re-syncing all dates")
+            self.maria.clear_date_range(start_date, end_date)
+            dates_to_process = all_dates
+        else:
+            logger.info("Checking for missing dates...")
+            existing_dates = self.maria.get_existing_dates(start_date, end_date)
+            dates_to_process = self.date_utils.get_missing_dates(all_dates, existing_dates)
+        
+        if not dates_to_process:
+            logger.info("No missing dates. All data is up to date!")
+            return
+        
+        logger.info(f"Processing {len(dates_to_process)} dates:")
+        for date in dates_to_process[:5]:
+            logger.info(f"  - {date}")
+        if len(dates_to_process) > 5:
+            logger.info(f"  ... and {len(dates_to_process) - 5} more")
+        
+        # *** Fetch all data once ***
+        logger.info(f"\n{'='*60}")
+        logger.info("Fetching all data from MongoDB...")
+
+        all_data = self.mongo.get_all_data(start_date, end_date)
+        all_messages = all_data['messages']
+        all_conversations = all_data['conversations']
+
+        # Build indexes once per sync
+        self.calculator.prepare(all_messages)
+
+        logger.info("Data loaded into memory. Processing dates...")
+        logger.info(f"{'='*60}\n")
+        
+        # Process each date using the pre-loaded data
+        for i, date in enumerate(dates_to_process, 1):
+            logger.info(f"\n{'='*60}")
+            logger.info(f"Progress: {i}/{len(dates_to_process)}")
+            
+            try:
+                self.process_daily_metrics(date, all_messages, all_conversations)
+                
+                # Weekly metrics on Sundays
+                if self.date_utils.is_week_end(date):
+                    self.process_weekly_metrics(date, all_messages)
+                
+                # Monthly metrics on last day of month
+                if self.date_utils.is_month_end(date):
+                    self.process_monthly_metrics(date, all_messages)
+                    
+            except Exception as e:
+                logger.error(f"Error processing {date}: {e}")
+                continue
+        
+        logger.info(f"\n{'='*60}")
+        logger.info(f"Successfully processed {len(dates_to_process)} dates")
+    
+    def run(self, start_date, end_date, force=False, cleanup=False):
+        """Main entry point - connects to DB and runs sync"""
+        try:
+            self.mongo.connect()
+            self.sync(start_date, end_date, force=force, cleanup=cleanup)
+        except Exception as e:
+            logger.error(f"Fatal error: {e}")
+            raise
+        finally:
+            self.mongo.close()
+
+
+# ============================================================================
+# CLI Interface
+# ============================================================================
 
 def parse_date(date_str):
     """Parse date string in YYYY-MM-DD format"""
     try:
         return datetime.strptime(date_str, '%Y-%m-%d').date()
     except ValueError:
-        raise ValueError("Date must be in YYYY-MM-DD format")
+        raise ValueError(f"Invalid date format: {date_str}. Use YYYY-MM-DD")
 
-def clear_metrics_tables():
-    """Clear all metrics tables before inserting new data"""
-    conn = get_mysql_connection()
-    cursor = conn.cursor()
-    
-    try:
-        # Clear all metrics tables
-        tables = [
-            'daily_users',
-            'daily_messages',
-            'daily_messages_by_model',
-            'daily_tokens_by_model',
-            'daily_errors_by_model',
-            'weekly_users',
-            'monthly_users'
-        ]
-        
-        for table in tables:
-            cursor.execute(f"TRUNCATE TABLE {table}")
-        
-        conn.commit()
-        print("Successfully cleared all metrics tables")
-    except Exception as e:
-        print(f"Error clearing metrics tables: {e}")
-        conn.rollback()
-    finally:
-        cursor.close()
-        conn.close()
 
 def main():
-    parser = argparse.ArgumentParser(description='Calculate historical metrics for LibreChat')
-    parser.add_argument('start_date', type=str, help='Start date in YYYY-MM-DD format')
-    parser.add_argument('end_date', type=str, help='End date in YYYY-MM-DD format')
+    """Main entry point"""
+    parser = argparse.ArgumentParser(
+        description='LibreChat Metrics Exporter - Sync metrics from MongoDB to MariaDB',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+                Examples:
+                # Sync past 30 days (default)
+                python export_metrics.py
+                
+                # Sync past 90 days with cleanup
+                python export_metrics.py --days 90 --cleanup
+                
+                # Sync specific date range
+                python export_metrics.py --start-date 2026-01-01 --end-date 2026-01-31
+                
+                # Force re-sync all dates
+                python export_metrics.py --force --cleanup
+                
+                Cron Examples:
+                # Daily sync at 2 AM, keep 30 days
+                0 2 * * * cd /path && python3 export_metrics.py --days 30 --cleanup
+                
+                # Hourly incremental sync (last 2 days)
+                0 * * * * cd /path && python3 export_metrics.py --days 2
+                """
+        )
+    
+    parser.add_argument('--start-date', type=str, metavar='YYYY-MM-DD',
+                       help='Start date (default: N days ago)')
+    parser.add_argument('--end-date', type=str, metavar='YYYY-MM-DD',
+                       help='End date (default: yesterday)')
+    parser.add_argument('--days', type=int, default=30, metavar='N',
+                       help='Number of days to look back (default: 30)')
+    parser.add_argument('--cleanup', action='store_true',
+                       help='Delete all data outside the date range')
+    parser.add_argument('--force', action='store_true',
+                       help='Force re-sync even if data already exists')
+    parser.add_argument('--verbose', '-v', action='store_true',
+                       help='Enable verbose logging')
     
     args = parser.parse_args()
     
+    # Configure logging level
+    if args.verbose:
+        logging.getLogger().setLevel(logging.DEBUG)
+    
     try:
-        start_date = parse_date(args.start_date)
-        end_date = parse_date(args.end_date)
+        # Load configuration
+        config = Config()
+        
+        # Determine date range
+        if args.start_date and args.end_date:
+            start_date = parse_date(args.start_date)
+            end_date = parse_date(args.end_date)
+        elif args.start_date or args.end_date:
+            raise ValueError("Both --start-date and --end-date must be provided together")
+        else:
+            # Default: past N days, excluding today (incomplete data)
+            end_date = datetime.now().date() - timedelta(days=1)
+            start_date = end_date - timedelta(days=args.days - 1)
         
         if start_date > end_date:
-            raise ValueError("Start date must be before end date")
+            raise ValueError("Start date must be before or equal to end date")
         
-        # Clear all metrics tables before starting
-        clear_metrics_tables()
+        # Run exporter
+        exporter = MetricsExporter(config)
+        exporter.run(start_date, end_date, force=args.force, cleanup=args.cleanup)
         
-        current_date = start_date
-        while current_date <= end_date:
-            print(f"Calculating metrics for {current_date}")
-            calculate_daily_metrics(current_date)
-            
-            # Calculate weekly metrics on Sundays
-            if current_date.weekday() == 6:
-                week_start = current_date - timedelta(days=6)
-                calculate_weekly_metrics(week_start)
-            
-            # Calculate monthly metrics on the last day of each month
-            if current_date.month != (current_date + timedelta(days=1)).month:
-                month_start = current_date.replace(day=1)
-                calculate_monthly_metrics(month_start)
-            
-            current_date += timedelta(days=1)
-            
-    except ValueError as e:
-        print(f"Error: {e}")
-        return 1
-    
-    return 0
+    except Exception as e:
+        logger.exception(f"Unexpected error: {e}")
+
 
 if __name__ == "__main__":
-    main() 
+    main()
