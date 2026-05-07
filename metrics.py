@@ -119,6 +119,18 @@ class LibreChatMetricsCollector(Collector):
         logger.info("  Cache enabled: %s", self.cache_enabled)
         logger.info("  Cache TTL: %d seconds", self.cache_ttl)
 
+    def describe(self):
+        """
+        Return an empty descriptor list.
+
+        prometheus_client's default Collector.describe() calls collect() to
+        discover metric names, which means REGISTRY.register() would trigger a
+        full (potentially very slow) DB collection at startup — blocking the
+        process for the duration of every query.  Returning [] bypasses that
+        duplicate-name check and lets the server start immediately.
+        """
+        return []
+
     def collect(self):
         """
         Collect metrics and yield Prometheus metrics.
@@ -133,9 +145,19 @@ class LibreChatMetricsCollector(Collector):
                     yield from self._metrics_cache
                     return
                 else:
-                    logger.warning("Cache enabled but no cached metrics available, collecting fresh metrics")
+                    # Cache is still warming up (background thread hasn't finished
+                    # its first collection yet).  Return empty rather than falling
+                    # through to a synchronous full collection, which would:
+                    #   1. Block the scrape for the full query duration.
+                    #   2. Run concurrently with the background thread, doubling
+                    #      DB load on every scrape until the cache is warm.
+                    logger.warning(
+                        "Cache warm-up in progress; returning empty metrics until "
+                        "background collection completes"
+                    )
+                    return
 
-        # Fall back to fresh collection if cache disabled or unavailable
+        # Cache disabled: collect fresh on every scrape.
         logger.debug("Collecting fresh metrics")
         yield from self._collect_all_metrics()
 
@@ -1715,12 +1737,15 @@ if __name__ == "__main__":
 
     port = 8000
 
-    # Start the Prometheus exporter
     collector = LibreChatMetricsCollector(mongodb_uri, cache_ttl=cache_ttl)
-    REGISTRY.register(collector)
 
-    # Start background collection thread if caching is enabled
+    # Start the background collection thread BEFORE registering with the
+    # Prometheus registry.  This lets the cache begin warming immediately so
+    # the first scrape is more likely to be served from cache rather than
+    # returning empty metrics during the warm-up window.
     collector._start_background_collection()
+
+    REGISTRY.register(collector)
 
     logger.info("Starting server on port %i", port)
 
