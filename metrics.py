@@ -1306,11 +1306,11 @@ class LibreChatMetricsCollector(Collector):
                 }
             ]
             for item in self.messages_collection.aggregate(all_time_pipeline):
-                gid   = item["_id"]
-                tool  = gid.get("tool")     or "unknown"
-                model = gid.get("model")    or "unknown"
-                ep    = gid.get("endpoint") or "unknown"
-                cnt   = item["count"]
+                gid = item["_id"]
+                tool = gid.get("tool") or "unknown"
+                model = gid.get("model") or "unknown"
+                ep = gid.get("endpoint") or "unknown"
+                cnt = item["count"]
 
                 cache["total_calls"] += cnt
                 cache["per_tool"][tool] = cache["per_tool"].get(tool, 0) + cnt
@@ -1342,7 +1342,12 @@ class LibreChatMetricsCollector(Collector):
                                         {"$eq": ["$$c.type", "tool_call"]},
                                         {
                                             "$regexMatch": {
-                                                "input": {"$convert": {"input": "$$c.tool_call.output", "to": "string", "onError": "", "onNull": ""}},
+                                                "input": {"$convert": {
+                                                    "input": "$$c.tool_call.output",
+                                                    "to": "string",
+                                                    "onError": "",
+                                                    "onNull": ""
+                                                }},
                                                 "regex": error_regex,
                                                 "options": "i"
                                             }
@@ -1396,7 +1401,12 @@ class LibreChatMetricsCollector(Collector):
                                 "$cond": [
                                     {
                                         "$regexMatch": {
-                                            "input": {"$convert": {"input": "$_tc.tool_call.output", "to": "string", "onError": "", "onNull": ""}},
+                                            "input": {"$convert": {
+                                                "input": "$_tc.tool_call.output",
+                                                "to": "string",
+                                                "onError": "",
+                                                "onNull": ""
+                                            }},
                                             "regex": error_regex,
                                             "options": "i"
                                         }
@@ -1411,9 +1421,9 @@ class LibreChatMetricsCollector(Collector):
             ]
             for item in self.messages_collection.aggregate(five_min_pipeline):
                 tool = item["_id"] or "unknown"
-                cache["calls_5m"]         += item["count"]
+                cache["calls_5m"] += item["count"]
                 cache["per_tool_5m"][tool] = item["count"]
-                cache["errors_5m"]        += item.get("error_count", 0)
+                cache["errors_5m"] += item.get("error_count", 0)
 
             # ── Query D: messages with tool calls + active tool users (5m)
             # count_documents uses the multikey index — no aggregation needed.
