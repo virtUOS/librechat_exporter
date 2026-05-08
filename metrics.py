@@ -1324,9 +1324,11 @@ class LibreChatMetricsCollector(Collector):
                     )
 
             # ── Query B (all-time): error counts per tool
-            # Use $indexOfCP (DocumentDB-compatible) instead of $regex so we
-            # avoid a regex scan on every output string after unwind.
-            error_output_prefix = "Error processing tool"
+            # $regexMatch with options:"i" matches both capitalised and lowercase
+            # variants emitted by LibreChat (ToolService.js vs assistants/chatV1.js).
+            # $convert guards against non-string output values (objects, numbers)
+            # that would cause $regexMatch to throw.
+            error_regex = "error processing tool"
             errors_pipeline = [
                 {"$match": has_tool_call},
                 {
@@ -1339,15 +1341,11 @@ class LibreChatMetricsCollector(Collector):
                                     "$and": [
                                         {"$eq": ["$$c.type", "tool_call"]},
                                         {
-                                            "$gte": [
-                                                {
-                                                    "$indexOfCP": [
-                                                        {"$ifNull": ["$$c.tool_call.output", ""]},
-                                                        error_output_prefix
-                                                    ]
-                                                },
-                                                0
-                                            ]
+                                            "$regexMatch": {
+                                                "input": {"$convert": {"input": "$$c.tool_call.output", "to": "string", "onError": "", "onNull": ""}},
+                                                "regex": error_regex,
+                                                "options": "i"
+                                            }
                                         }
                                     ]
                                 }
@@ -1397,15 +1395,11 @@ class LibreChatMetricsCollector(Collector):
                             "$sum": {
                                 "$cond": [
                                     {
-                                        "$gte": [
-                                            {
-                                                "$indexOfCP": [
-                                                    {"$ifNull": ["$_tc.tool_call.output", ""]},
-                                                    error_output_prefix
-                                                ]
-                                            },
-                                            0
-                                        ]
+                                        "$regexMatch": {
+                                            "input": {"$convert": {"input": "$_tc.tool_call.output", "to": "string", "onError": "", "onNull": ""}},
+                                            "regex": error_regex,
+                                            "options": "i"
+                                        }
                                     },
                                     1,
                                     0
