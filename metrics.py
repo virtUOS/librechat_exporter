@@ -74,6 +74,10 @@ class LibreChatMetricsCollector(Collector):
         logger.info("  Tool metrics: %s", self.enable_tool_metrics)
         logger.info("  File metrics: %s", self.enable_file_metrics)
 
+        logger.info("Cache configuration:")
+        logger.info("  Cache enabled: %s", self.cache_enabled)
+        logger.info("  Cache TTL: %d seconds", self.cache_ttl)
+
     def _start_background_collection(self):
         """
         Start background thread for metrics collection.
@@ -115,10 +119,6 @@ class LibreChatMetricsCollector(Collector):
             # Sleep for cache_ttl seconds or until stop event
             self._stop_collection.wait(self.cache_ttl)
 
-        logger.info("Cache configuration:")
-        logger.info("  Cache enabled: %s", self.cache_enabled)
-        logger.info("  Cache TTL: %d seconds", self.cache_ttl)
-
     def describe(self):
         """
         Return an empty descriptor list.
@@ -134,7 +134,14 @@ class LibreChatMetricsCollector(Collector):
     def collect(self):
         """
         Collect metrics and yield Prometheus metrics.
-        If caching is enabled, serve from cache. Otherwise, collect fresh metrics.
+
+        Behavior depends on cache state:
+          - Cache enabled and populated: serve cached metrics.
+          - Cache enabled but still warming up (background thread hasn't
+            finished its first collection): yield nothing. The next scrape
+            after warm-up will see real data. This avoids blocking the
+            scrape and racing the background thread.
+          - Cache disabled: collect fresh metrics on every scrape.
         """
         if self.cache_enabled:
             # Serve from cache
