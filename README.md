@@ -312,11 +312,11 @@ librechat_thumbs_down_per_model{model="claude-3"} 2.0
 librechat_rating_ratio_per_model{model="gpt-4"} 88.9
 librechat_rating_ratio_per_model{model="claude-3"} 77.8
 
-# HELP librechat_rating_counts_per_tag Number of ratings per feedback tag
+# HELP librechat_rating_counts_per_tag Number of ratings per feedback tag and rating direction
 # TYPE librechat_rating_counts_per_tag gauge
-librechat_rating_counts_per_tag{tag="accurate_reliable"} 8.0
-librechat_rating_counts_per_tag{tag="helpful"} 6.0
-librechat_rating_counts_per_tag{tag="creative"} 4.0
+librechat_rating_counts_per_tag{tag="accurate_reliable",rating="thumbsUp"} 8.0
+librechat_rating_counts_per_tag{tag="clear_well_written",rating="thumbsUp"} 6.0
+librechat_rating_counts_per_tag{tag="not_matched",rating="thumbsDown"} 4.0
 
 # HELP librechat_overall_rating_ratio Overall percentage of positive ratings (0-100)
 # TYPE librechat_overall_rating_ratio gauge
@@ -337,11 +337,11 @@ librechat_rated_messages_total 18.0
 # HELP librechat_model_tag_thumbs_up Number of thumbs up ratings per model and tag combination
 # TYPE librechat_model_tag_thumbs_up gauge
 librechat_model_tag_thumbs_up{model="gpt-4",tag="accurate_reliable"} 5.0
-librechat_model_tag_thumbs_up{model="claude-3",tag="creative"} 3.0
+librechat_model_tag_thumbs_up{model="claude-3",tag="creative_solution"} 3.0
 
 # HELP librechat_model_tag_thumbs_down Number of thumbs down ratings per model and tag combination
 # TYPE librechat_model_tag_thumbs_down gauge
-librechat_model_tag_thumbs_down{model="gpt-4",tag="unhelpful"} 1.0
+librechat_model_tag_thumbs_down{model="gpt-4",tag="not_helpful"} 1.0
 # HELP librechat_tool_calls_total Total number of tool calls made
 # TYPE librechat_tool_calls_total gauge
 librechat_tool_calls_total 240.0
