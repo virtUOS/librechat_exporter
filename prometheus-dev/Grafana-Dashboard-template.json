@@ -435,9 +435,37 @@
       ]
     },
     {
+      "type": "bargauge",
+      "title": "Positive Feedback Tags",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 39 },
+      "id": 27,
+      "options": { "orientation": "horizontal", "displayMode": "gradient", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "showUnfilled": true },
+      "fieldConfig": {
+        "defaults": { "color": { "mode": "continuous-GrYlRd" }, "unit": "short" }
+      },
+      "targets": [
+        { "expr": "librechat_rating_counts_per_tag{rating=\"thumbsUp\"}", "legendFormat": "{{tag}}", "refId": "A", "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" } }
+      ]
+    },
+    {
+      "type": "bargauge",
+      "title": "Negative Feedback Tags",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 39 },
+      "id": 28,
+      "options": { "orientation": "horizontal", "displayMode": "gradient", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "showUnfilled": true },
+      "fieldConfig": {
+        "defaults": { "color": { "mode": "continuous-RdYlGr" }, "unit": "short" }
+      },
+      "targets": [
+        { "expr": "librechat_rating_counts_per_tag{rating=\"thumbsDown\"}", "legendFormat": "{{tag}}", "refId": "A", "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" } }
+      ]
+    },
+    {
       "type": "row",
       "title": "Tools & Files",
-      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 39 },
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 47 },
       "id": 103,
       "collapsed": false,
       "panels": []
@@ -446,7 +474,7 @@
       "type": "stat",
       "title": "Tool Calls (total)",
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 40 },
+      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 48 },
       "id": 21,
       "options": {
         "colorMode": "value",
@@ -466,7 +494,7 @@
       "type": "stat",
       "title": "Tool Errors (total)",
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 40 },
+      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 48 },
       "id": 22,
       "options": {
         "colorMode": "value",
@@ -486,7 +514,7 @@
       "type": "stat",
       "title": "Active Tool Users",
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-      "gridPos": { "h": 4, "w": 6, "x": 12, "y": 40 },
+      "gridPos": { "h": 4, "w": 6, "x": 12, "y": 48 },
       "id": 23,
       "options": {
         "colorMode": "value",
@@ -506,7 +534,7 @@
       "type": "stat",
       "title": "Uploaded Files",
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-      "gridPos": { "h": 4, "w": 6, "x": 18, "y": 40 },
+      "gridPos": { "h": 4, "w": 6, "x": 18, "y": 48 },
       "id": 24,
       "options": {
         "colorMode": "value",
@@ -526,7 +554,7 @@
       "type": "bargauge",
       "title": "Tool Calls per Tool",
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 44 },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 52 },
       "id": 25,
       "options": { "orientation": "horizontal", "displayMode": "gradient", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "showUnfilled": true },
       "fieldConfig": {
@@ -540,7 +568,7 @@
       "type": "bargauge",
       "title": "Tool Success Rate per Tool",
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 44 },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 52 },
       "id": 26,
       "options": { "orientation": "horizontal", "displayMode": "gradient", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "showUnfilled": true },
       "fieldConfig": {

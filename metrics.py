@@ -964,14 +964,23 @@ class LibreChatMetricsCollector(Collector):
                 cache['per_model'][model][rating] = item['count']
                 cache['per_model'][model]['total'] += item['count']
 
-            # Query 3: Per-tag ratings
+            # Query 3: Per-tag ratings, split by rating direction.
+            # Each LibreChat feedback tag belongs to exactly one rating
+            # (thumbsUp/thumbsDown), so grouping by both keeps positive and
+            # negative tags from being collapsed into a single count.
             per_tag_pipeline = [
                 {"$match": {"feedback.tag": {"$exists": True, "$ne": None}}},
-                {"$group": {"_id": "$feedback.tag", "count": {"$sum": 1}}}
+                {
+                    "$group": {
+                        "_id": {"tag": "$feedback.tag", "rating": "$feedback.rating"},
+                        "count": {"$sum": 1}
+                    }
+                }
             ]
             for item in self.messages_collection.aggregate(per_tag_pipeline):
-                tag = item['_id'] or 'unknown'
-                cache['per_tag'][tag] = item['count']
+                tag = item['_id']['tag'] or 'unknown'
+                rating = item['_id'].get('rating') or 'unknown'
+                cache['per_tag'][(tag, rating)] = item['count']
 
             # Query 4: Model-tag combinations
             model_tag_pipeline = [
@@ -1134,13 +1143,13 @@ class LibreChatMetricsCollector(Collector):
 
             metric = GaugeMetricFamily(
                 "librechat_rating_counts_per_tag",
-                "Number of ratings per feedback tag",
-                labels=["tag"],
+                "Number of ratings per feedback tag and rating direction",
+                labels=["tag", "rating"],
             )
 
-            for tag, count in data.items():
-                metric.add_metric([tag], count)
-                logger.debug("Rating count for tag %s: %s", tag, count)
+            for (tag, rating), count in data.items():
+                metric.add_metric([tag, rating], count)
+                logger.debug("Rating count for tag %s (%s): %s", tag, rating, count)
 
             yield metric
         except Exception as e:
