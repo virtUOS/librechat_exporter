@@ -14,11 +14,11 @@ jobs:
         # https://endoflife.date/python
         # https://github.com/actions/runner-images/blob/main/images/linux/Ubuntu2204-Readme.md#python
         python-version:
-          - "3.9"
           - "3.10"
           - "3.11"
           - "3.12"
           - "3.13"
+          - "3.14"
 
     steps:
       - name: start mongodb
@@ -32,8 +32,6 @@ jobs:
           python-version: ${{ matrix.python-version }}
 
       - run: pip install -r requirements.txt
-
-      - run: pip install flake8 bandit
 
       - name: add test data to mongodb
         run: |
