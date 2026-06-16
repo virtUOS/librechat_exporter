@@ -51,6 +51,7 @@ jobs:
         env:
           MONGODB_URI: "mongodb://127.0.0.1:27017/"
           LOGGING_LEVEL: debug
+          METRICS_CACHE_ENABLED: "false"
         run: python metrics.py &> exporter.log &
 
       - name: get metrics
