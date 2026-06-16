@@ -1,0 +1,20 @@
+apiVersion: v2
+name: librechat-exporter
+description: Prometheus exporter for LibreChat metrics from MongoDB
+type: application
+# Chart version — bump on every chart change.
+version: 0.1.0
+# Version of the librechat_exporter image this chart deploys by default.
+appVersion: "2.4.0"
+home: https://github.com/virtUOS/librechat_exporter
+sources:
+  - https://github.com/virtUOS/librechat_exporter
+keywords:
+  - librechat
+  - prometheus
+  - exporter
+  - metrics
+  - mongodb
+maintainers:
+  - name: virtUOS
+    url: https://github.com/virtUOS

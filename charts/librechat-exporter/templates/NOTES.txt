@@ -1,0 +1,23 @@
+{{ include "librechat-exporter.fullname" . }} has been deployed.
+
+The exporter serves Prometheus metrics on port {{ .Values.service.port }} at /metrics.
+
+To scrape it from within the cluster:
+
+  http://{{ include "librechat-exporter.fullname" . }}.{{ .Release.Namespace }}.svc:{{ .Values.service.port }}/metrics
+
+{{- if .Values.serviceMonitor.enabled }}
+
+A ServiceMonitor was created. Ensure your Prometheus Operator's
+serviceMonitorSelector matches this chart's labels (override
+serviceMonitor.labels if needed).
+{{- else }}
+
+ServiceMonitor is disabled. Enable it with --set serviceMonitor.enabled=true
+(requires the Prometheus Operator CRDs), or scrape the Service directly.
+{{- end }}
+
+To verify locally:
+
+  kubectl --namespace {{ .Release.Namespace }} port-forward svc/{{ include "librechat-exporter.fullname" . }} {{ .Values.service.port }}:{{ .Values.service.port }}
+  curl http://localhost:{{ .Values.service.port }}/metrics
