@@ -5,6 +5,7 @@ import time
 import urllib.error
 import urllib.request
 from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from dotenv import load_dotenv
 from prometheus_client.core import REGISTRY, GaugeMetricFamily, CounterMetricFamily
@@ -78,6 +79,20 @@ class LibreChatMetricsCollector(Collector):
 
         self.librechat_url = os.getenv("LIBRECHAT_URL", "")
         logger.info("LibreChat URL (health check): %s", self.librechat_url or "(not configured)")
+
+        # Timezone for daily/weekly/monthly calendar boundaries. Defaults to UTC.
+        # createdAt is stored as UTC; computing boundaries as tz-aware datetimes in
+        # the configured zone lets PyMongo serialize them back to the correct UTC
+        # instant, so the only effect is *where* the local day/week/month begins.
+        tz_name = os.getenv("METRICS_TIMEZONE", "UTC")
+        try:
+            self.timezone = ZoneInfo(tz_name)
+        except (ZoneInfoNotFoundError, ValueError) as e:
+            logger.warning(
+                "Invalid METRICS_TIMEZONE %r (%s); falling back to UTC", tz_name, e
+            )
+            self.timezone = timezone.utc
+        logger.info("Metrics timezone (daily/weekly/monthly boundaries): %s", self.timezone)
 
         logger.info("Cache configuration:")
         logger.info("  Cache enabled: %s", self.cache_enabled)
@@ -597,14 +612,18 @@ class LibreChatMetricsCollector(Collector):
         except Exception as e:
             logger.exception("Error collecting number of registered users: %s", e)
 
+    def _start_of_day(self):
+        """Return the start of the current day (00:00) in the configured timezone."""
+        return datetime.now(self.timezone).replace(
+            hour=0, minute=0, second=0, microsecond=0
+        )
+
     def collect_daily_unique_users(self):
         """
         Collect number of unique users active in the current day.
         """
         try:
-            start_of_day = datetime.now(timezone.utc).replace(
-                hour=0, minute=0, second=0, microsecond=0
-            )
+            start_of_day = self._start_of_day()
             unique_users = len(
                 self.messages_collection.distinct(
                     "user", {"createdAt": {"$gte": start_of_day}}
@@ -624,13 +643,9 @@ class LibreChatMetricsCollector(Collector):
         Collect number of unique users active in the current week (starting from Monday).
         """
         try:
-            now = datetime.now(timezone.utc)
-            # Calculate days since Monday (0=Monday, 1=Tuesday, etc.)
-            days_since_monday = now.weekday()
-            # Get the start of current week (Monday 00:00:00)
-            start_of_week = (now - timedelta(days=days_since_monday)).replace(
-                hour=0, minute=0, second=0, microsecond=0
-            )
+            # Calculate days since Monday (0=Monday, 1=Tuesday, etc.) in local time
+            start_of_day = self._start_of_day()
+            start_of_week = start_of_day - timedelta(days=start_of_day.weekday())
 
             unique_users = len(
                 self.messages_collection.distinct(
@@ -651,11 +666,8 @@ class LibreChatMetricsCollector(Collector):
         Collect number of unique users active in the current month.
         """
         try:
-            now = datetime.now(timezone.utc)
-            # Get the start of current month (1st day 00:00:00)
-            start_of_month = now.replace(
-                day=1, hour=0, minute=0, second=0, microsecond=0
-            )
+            # Get the start of current month (1st day 00:00:00) in local time
+            start_of_month = self._start_of_day().replace(day=1)
 
             unique_users = len(
                 self.messages_collection.distinct(

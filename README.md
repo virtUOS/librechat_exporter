@@ -92,6 +92,12 @@ LOGGING_FORMAT="%(asctime)s - %(levelname)s - %(message)s"
 # Specify Mongo Database - Optional. Defaults to "LibreChat"
 MONGODB_DATABASE=librechat
 
+# Timezone for daily/weekly/monthly metric boundaries - Optional. Defaults to "UTC".
+# Accepts an IANA timezone name (e.g. Asia/Tokyo, Europe/Berlin) so the
+# daily/weekly/monthly unique-user metrics reset at local midnight instead of
+# UTC midnight. An invalid value logs a warning and falls back to UTC.
+METRICS_TIMEZONE=UTC
+
 # ===== Performance Optimization =====
 # Background cache enabled (recommended for large databases)
 # When enabled, metrics are collected in a background thread and cached

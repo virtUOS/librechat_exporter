@@ -51,6 +51,7 @@ jobs:
           LOGGING_LEVEL: debug
           METRICS_CACHE_ENABLED: "false"
           LIBRECHAT_URL: "http://localhost:8000"
+          METRICS_TIMEZONE: "Asia/Tokyo"
         run: python metrics.py &> exporter.log &
 
       - name: get metrics
