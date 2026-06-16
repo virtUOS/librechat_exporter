@@ -6,6 +6,13 @@ on:
       - "dependabot/**"
   pull_request:
 
+# Cancel superseded runs of the same workflow on the same ref (e.g. after a
+# force-push), so an in-progress run does not linger and surface as a spurious
+# failure. push and pull_request runs for the same commit remain independent.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -59,13 +66,16 @@ jobs:
           curl -fisS --retry 60 --retry-delay 1 --retry-all-errors
           http://localhost:8000 -o metrics
 
+      # Debug helpers — tolerate a missing file so a cancelled run is not
+      # flipped to "failure" by these always() steps when the metrics file
+      # was never written.
       - name: show metrics
         if: ${{ always() }}
-        run: cat metrics
+        run: cat metrics || true
 
       - name: show log
         if: ${{ always() }}
-        run: cat exporter.log
+        run: cat exporter.log || true
 
       - name: probe for valid output
         run: grep 'librechat_registered_users_total 1.0' metrics
