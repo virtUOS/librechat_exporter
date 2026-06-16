@@ -1364,9 +1364,28 @@ class LibreChatMetricsCollector(Collector):
             # ── Query B (all-time): error counts per tool
             # $regexMatch with options:"i" matches both capitalised and lowercase
             # variants emitted by LibreChat (ToolService.js vs assistants/chatV1.js).
-            # $convert guards against non-string output values (objects, numbers)
-            # that would cause $regexMatch to throw.
+            # An explicit $type guard ensures $regexMatch only ever sees a string;
+            # non-string outputs (structured objects, numbers) are mapped to "".
+            # We avoid $convert coercion because Azure Cosmos DB / DocumentDB do not
+            # take its onError branch for unsupported types, leaking a non-string
+            # value into $regexMatch (error 51104). See issue #67.
             error_regex = "error processing tool"
+
+            def error_match(field):
+                return {
+                    "$regexMatch": {
+                        "input": {
+                            "$cond": [
+                                {"$eq": [{"$type": field}, "string"]},
+                                field,
+                                ""
+                            ]
+                        },
+                        "regex": error_regex,
+                        "options": "i"
+                    }
+                }
+
             errors_pipeline = [
                 {"$match": has_tool_call},
                 {
@@ -1378,18 +1397,7 @@ class LibreChatMetricsCollector(Collector):
                                 "cond": {
                                     "$and": [
                                         {"$eq": ["$$c.type", "tool_call"]},
-                                        {
-                                            "$regexMatch": {
-                                                "input": {"$convert": {
-                                                    "input": "$$c.tool_call.output",
-                                                    "to": "string",
-                                                    "onError": "",
-                                                    "onNull": ""
-                                                }},
-                                                "regex": error_regex,
-                                                "options": "i"
-                                            }
-                                        }
+                                        error_match("$$c.tool_call.output")
                                     ]
                                 }
                             }
@@ -1437,18 +1445,7 @@ class LibreChatMetricsCollector(Collector):
                         "error_count": {
                             "$sum": {
                                 "$cond": [
-                                    {
-                                        "$regexMatch": {
-                                            "input": {"$convert": {
-                                                "input": "$_tc.tool_call.output",
-                                                "to": "string",
-                                                "onError": "",
-                                                "onNull": ""
-                                            }},
-                                            "regex": error_regex,
-                                            "options": "i"
-                                        }
-                                    },
+                                    error_match("$_tc.tool_call.output"),
                                     1,
                                     0
                                 ]
