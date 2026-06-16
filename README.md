@@ -74,6 +74,12 @@ You can either set then directly, or add them to the `.env` file.
 Available configurations are:
 
 ```sh
+# LibreChat web interface URL for health check (optional)
+# When set, exposes the `librechat_status_code` metric with the HTTP status code
+# returned by a HEAD request (-1 if the server is unreachable)
+# Example: LIBRECHAT_URL=http://api:3000
+LIBRECHAT_URL=
+
 # Configure database connection
 MONGODB_URI=mongodb://mongodb:27017/
 

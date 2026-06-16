@@ -50,6 +50,7 @@ jobs:
           MONGODB_URI: "mongodb://127.0.0.1:27017/"
           LOGGING_LEVEL: debug
           METRICS_CACHE_ENABLED: "false"
+          LIBRECHAT_URL: "http://localhost:8000"
         run: python metrics.py &> exporter.log &
 
       - name: get metrics
@@ -67,3 +68,6 @@ jobs:
 
       - name: probe for valid output
         run: grep 'librechat_registered_users_total 1.0' metrics
+
+      - name: probe for librechat status in output
+        run: grep 'librechat_status_code' metrics

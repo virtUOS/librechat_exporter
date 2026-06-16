@@ -2,6 +2,8 @@ import logging
 import os
 import threading
 import time
+import urllib.error
+import urllib.request
 from datetime import datetime, timedelta, timezone
 
 from dotenv import load_dotenv
@@ -73,6 +75,9 @@ class LibreChatMetricsCollector(Collector):
         logger.info("  Rating metrics: %s", self.enable_rating_metrics)
         logger.info("  Tool metrics: %s", self.enable_tool_metrics)
         logger.info("  File metrics: %s", self.enable_file_metrics)
+
+        self.librechat_url = os.getenv("LIBRECHAT_URL", "")
+        logger.info("LibreChat URL (health check): %s", self.librechat_url or "(not configured)")
 
         logger.info("Cache configuration:")
         logger.info("  Cache enabled: %s", self.cache_enabled)
@@ -176,6 +181,9 @@ class LibreChatMetricsCollector(Collector):
         self._rating_cache = None
         self._tool_cache = None
 
+        # Health check - only emitted when LIBRECHAT_URL is configured
+        yield from self.collect_status_code()
+
         # Basic metrics - message and conversation counts
         if self.enable_basic_metrics:
             yield from self.collect_message_count()
@@ -246,6 +254,30 @@ class LibreChatMetricsCollector(Collector):
         # File metrics - uploaded files
         if self.enable_file_metrics:
             yield from self.collect_uploaded_file_count()
+
+    def collect_status_code(self):
+        """
+        Return the HTTP status code of a HEAD request to the LibreChat web interface.
+
+        Only emits a metric when LIBRECHAT_URL is configured. Returns -1 when the
+        server is unreachable (connection error, timeout, DNS failure).
+        """
+        if not self.librechat_url:
+            return
+        try:
+            req = urllib.request.Request(self.librechat_url, method="HEAD")
+            with urllib.request.urlopen(req, timeout=5) as response:  # nosec B310
+                value = float(response.status)
+        except urllib.error.HTTPError as e:
+            value = float(e.code)
+        except Exception as e:
+            logger.debug("LibreChat health check failed for %s: %s", self.librechat_url, e)
+            value = -1.0
+        yield GaugeMetricFamily(
+            "librechat_status_code",
+            "HTTP status code returned by the LibreChat web interface (-1 if unreachable)",
+            value=value,
+        )
 
     def collect_message_count(self):
         """
