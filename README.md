@@ -211,6 +211,21 @@ metrics:
 
 Make sure the networks attribute is the same as your mongodb container.
 
+## Kubernetes / Helm
+
+A Helm chart is provided under [`charts/librechat-exporter`](charts/librechat-exporter)
+for deploying the exporter to Kubernetes. It ships a Deployment and Service and
+can optionally create a Prometheus Operator `ServiceMonitor`.
+
+```sh
+helm install librechat-exporter ./charts/librechat-exporter \
+  --set mongodb.uri="mongodb://my-mongo:27017/" \
+  --set serviceMonitor.enabled=true
+```
+
+See the [chart README](charts/librechat-exporter/README.md) for the full list of
+values.
+
 ## Metrics
 
 The exporter provides the following metrics specific to LibreChat:

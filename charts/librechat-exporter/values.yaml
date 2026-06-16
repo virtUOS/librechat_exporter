@@ -1,0 +1,85 @@
+# Default values for librechat-exporter.
+
+replicaCount: 1
+
+image:
+  repository: ghcr.io/virtuos/librechat_exporter
+  # Overrides the image tag. Defaults to the chart's appVersion when empty.
+  tag: ""
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+mongodb:
+  # MongoDB connection URI. Used to populate a chart-managed Secret when
+  # existingSecret is empty.
+  uri: "mongodb://mongodb:27017/"
+  # Name of an existing Secret that contains the MongoDB URI. When set, the
+  # chart does not create its own Secret and `uri` above is ignored.
+  existingSecret: ""
+  # Key within existingSecret that holds the MongoDB URI.
+  existingSecretKey: mongodb-uri
+
+# Additional environment variables as a simple name/value map. The exporter
+# is configured entirely through env vars, e.g.:
+#   METRICS_TIMEZONE: "Asia/Tokyo"
+#   LOGGING_LEVEL: "info"
+#   ENABLE_TOOL_METRICS: "false"
+#   LIBRECHAT_URL: "http://librechat:3080"
+env: {}
+
+# Additional environment variables as raw entries, for valueFrom and friends.
+# Example:
+#   - name: EXTRA
+#     valueFrom:
+#       configMapKeyRef:
+#         name: my-config
+#         key: extra
+extraEnv: []
+
+service:
+  type: ClusterIP
+  port: 8000
+  annotations: {}
+
+serviceMonitor:
+  # Requires the Prometheus Operator CRDs (monitoring.coreos.com) to be installed.
+  enabled: false
+  # Scrape interval. Defaults to 60s, matching the exporter's collection cadence.
+  interval: 60s
+  scrapeTimeout: ""
+  # Extra labels for the ServiceMonitor (e.g. to match a Prometheus release selector).
+  labels: {}
+  honorLabels: false
+  relabelings: []
+  metricRelabelings: []
+
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+
+# Probes hit /metrics, which always returns 200 (empty during cache warm-up).
+livenessProbe:
+  httpGet:
+    path: /metrics
+    port: metrics
+  initialDelaySeconds: 10
+  periodSeconds: 30
+readinessProbe:
+  httpGet:
+    path: /metrics
+    port: metrics
+  initialDelaySeconds: 5
+  periodSeconds: 15
+
+resources: {}
+podAnnotations: {}
+podLabels: {}
+podSecurityContext: {}
+securityContext: {}
+nodeSelector: {}
+tolerations: []
+affinity: {}
