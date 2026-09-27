@@ -50,6 +50,22 @@ jobs:
             db.users.insertOne({
               username: "jdoe"
             });
+            db.transactions.insertMany([
+              { user: ObjectId("000000000000000000000001"), model: "gemini-flash", context: "message",
+                tokenType: "prompt", rawAmount: -100, createdAt: ISODate("3025-01-15T21:31:09.989Z") },
+              { user: ObjectId("000000000000000000000002"), model: "local-llm", context: "message",
+                tokenType: "prompt", rawAmount: -100, createdAt: ISODate("3025-01-15T21:31:09.989Z") },
+              { user: ObjectId("000000000000000000000002"), model: "gemini-flash", context: "message",
+                tokenType: "prompt", rawAmount: -100, createdAt: ISODate("3025-01-15T21:31:09.989Z") },
+              { user: ObjectId("000000000000000000000003"), model: "gemini-flash", context: "title",
+                tokenType: "prompt", rawAmount: -100, createdAt: ISODate("3025-01-15T21:31:09.989Z") }
+            ]);
+            db.messages.insertOne({
+              isCreatedByUser: false,
+              endpoint: "custom",
+              model: "local-llm",
+              createdAt: ISODate("3025-01-15T21:31:09.989Z")
+            });
             quit;' | docker exec -i mongo mongosh LibreChat
 
       - name: run exporter
@@ -59,6 +75,7 @@ jobs:
           METRICS_CACHE_ENABLED: "false"
           LIBRECHAT_URL: "http://localhost:8000"
           METRICS_TIMEZONE: "Asia/Tokyo"
+          EXTERNAL_MODEL_REGEX: "gemini"
         run: python metrics.py &> exporter.log &
 
       - name: get metrics
@@ -82,3 +99,13 @@ jobs:
 
       - name: probe for librechat status in output
         run: grep 'librechat_status_code' metrics
+
+      # Label order in the output depends on the prometheus-client version, so
+      # match each label separately. The title transaction must not count.
+      - name: probe for usage window metrics
+        run: |
+          grep '^librechat_window_unique_users{window="1d"} 2.0' metrics
+          grep '^librechat_window_users_by_model_class{' metrics | grep 'window="1d"' | grep 'usage="both"' | grep ' 1.0$'
+          grep '^librechat_window_users_by_model_class{' metrics | grep 'window="1d"' | grep 'usage="external_only"' | grep ' 1.0$'
+          grep '^librechat_window_answers_per_model{' metrics | grep 'model="local-llm"' | grep 'class="local"' | grep 'window="1d"' | grep ' 1.0$'
+          grep '^librechat_window_tokens_per_model{' metrics | grep 'model="gemini-flash"' | grep 'type="input"' | grep 'window="1d"' | grep ' 200.0$'
