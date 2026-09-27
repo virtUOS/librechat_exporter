@@ -20,6 +20,7 @@ The script connects to the MongoDB database used by LibreChat, aggregates releva
   - **Chat rating metrics** (thumbs up/down, feedback tags, model performance)
   - **Tool usage metrics** (tool calls, success rates, per-model/endpoint breakdown)
   - **Real-time activity monitoring** (5-minute windows)
+  - **Usage per model over rolling windows** (e.g. 1d/7d/30d): unique users, answers and tokens, optionally split into local and external models
 - **Chat Rating Analytics**:
   - Track user satisfaction with thumbs up/down ratings
   - Analyze model performance and quality feedback
@@ -137,6 +138,23 @@ ENABLE_TOOL_METRICS=true
 
 # File metrics: uploaded file counts
 ENABLE_FILE_METRICS=true
+
+# Usage window metrics: unique users, answers and tokens per model over rolling windows
+ENABLE_USAGE_WINDOW_METRICS=true
+
+# ===== Usage Window Metrics =====
+# Rolling windows (units: h, d). Keep the longest within your data retention:
+# deleted chats drop out of the counts.
+USAGE_WINDOWS=1d,7d,30d
+
+# How often the usage window metrics are recomputed, in seconds. They scan up to
+# the longest window, so they refresh less often than the other metrics.
+USAGE_METRICS_TTL=900
+
+# Optional, case-insensitive regex (Python syntax) for models run by a third party.
+# Matching models get class="external", all others class="local", and the
+# librechat_window_users_by_model_class metric is exposed. Unset: class="unclassified".
+EXTERNAL_MODEL_REGEX=gemini|claude|gpt
 ```
 
 #### Performance Optimization for Large Databases
@@ -427,6 +445,60 @@ librechat_messages_with_tools_total 92.0
 # HELP librechat_active_tool_users Number of unique users using tools in the last 5 minutes
 # TYPE librechat_active_tool_users gauge
 librechat_active_tool_users 2.0
+
+# HELP librechat_window_unique_users Number of unique users with at least one chat request in the rolling window
+# TYPE librechat_window_unique_users gauge
+librechat_window_unique_users{window="7d"} 412.0
+
+# HELP librechat_window_users_by_model_class Number of unique users in the rolling window by the model classes they used
+# TYPE librechat_window_users_by_model_class gauge
+librechat_window_users_by_model_class{usage="local_only",window="7d"} 150.0
+librechat_window_users_by_model_class{usage="external_only",window="7d"} 101.0
+librechat_window_users_by_model_class{usage="both",window="7d"} 161.0
+
+# HELP librechat_window_answers_per_model Number of assistant answers (without errors) per model in the rolling window
+# TYPE librechat_window_answers_per_model gauge
+librechat_window_answers_per_model{class="local",model="Qwen/Qwen3.5-122B-A10B-FP8",window="7d"} 318.0
+librechat_window_answers_per_model{class="external",model="gemini-3.8-flash",window="7d"} 725.0
+
+# HELP librechat_window_tokens_per_model Number of tokens of chat requests per model in the rolling window
+# TYPE librechat_window_tokens_per_model gauge
+librechat_window_tokens_per_model{class="local",model="Qwen/Qwen3.5-122B-A10B-FP8",type="input",window="7d"} 1.4e+07
+librechat_window_tokens_per_model{class="local",model="Qwen/Qwen3.5-122B-A10B-FP8",type="output",window="7d"} 9.1e+05
+```
+
+### Usage window metrics
+
+The `librechat_window_*` metrics count what happened in each rolling window
+(`USAGE_WINDOWS`) instead of over the whole database, so they don't drop when
+old chats are deleted and a share over time is a plain ratio:
+
+- Users and tokens come from the `transactions` collection, which records the
+  model that actually ran, for agents too. Only chat requests count; title
+  generation, summarization, memory and image generation are left out.
+  LibreChat records transactions unless `transactions.enabled` is `false`.
+- Answers come from the `messages` collection (assistant messages without
+  errors). An agent's answers carry the agent id and are counted under the
+  agent's current model.
+- A user counts as `both` when they used at least one local and one external
+  model in the window. The three `usage` values add up to
+  `librechat_window_unique_users`.
+- Input tokens include the chat history and system prompt resent with every
+  request, unlike `librechat_input_tokens_per_model_total`, which counts only
+  the user's own message.
+
+Share of users who used external models in the last 7 days:
+
+```promql
+sum by (instance) (librechat_window_users_by_model_class{window="7d", usage=~"external_only|both"})
+  / on (instance) librechat_window_unique_users{window="7d"}
+```
+
+Share of answers from local models:
+
+```promql
+sum by (instance) (librechat_window_answers_per_model{window="7d", class="local"})
+  / on (instance) sum by (instance) (librechat_window_answers_per_model{window="7d"})
 ```
 
 ## Development

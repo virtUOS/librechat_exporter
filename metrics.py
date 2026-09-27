@@ -1,5 +1,6 @@
 import logging
 import os
+import re
 import threading
 import time
 import urllib.error
@@ -24,6 +25,11 @@ logformat = os.getenv("LOGGING_FORMAT", "%(asctime)s - %(levelname)s - %(message
 logging.basicConfig(format=logformat, level=loglevel)
 logger = logging.getLogger(__name__)
 logger.debug("Set log level to %s", logging.getLevelName(logger.getEffectiveLevel()))
+
+# Transaction contexts of user-driven chat requests. Title generation,
+# summarization, memory and image generation run in the background and are
+# left out of the usage window metrics.
+CHAT_CONTEXTS = ["message", "incomplete"]
 
 
 class LibreChatMetricsCollector(Collector):
@@ -66,6 +72,26 @@ class LibreChatMetricsCollector(Collector):
         self.enable_rating_metrics = os.getenv("ENABLE_RATING_METRICS", "true").lower() == "true"
         self.enable_tool_metrics = os.getenv("ENABLE_TOOL_METRICS", "true").lower() == "true"
         self.enable_file_metrics = os.getenv("ENABLE_FILE_METRICS", "true").lower() == "true"
+        self.enable_usage_window_metrics = os.getenv("ENABLE_USAGE_WINDOW_METRICS", "true").lower() == "true"
+
+        # Rolling windows for the usage window metrics. They scan up to the longest
+        # window, so they are recomputed at most every USAGE_METRICS_TTL seconds.
+        self.usage_windows = self._parse_usage_windows(os.getenv("USAGE_WINDOWS", "1d,7d,30d"))
+        self.usage_metrics_ttl = int(os.getenv("USAGE_METRICS_TTL", "900"))
+        self._usage_cache = None
+        self._usage_cache_timestamp = None
+
+        # Models whose name matches this regex count as "external" (run by a third
+        # party), all others as "local". Unset: models stay unclassified.
+        self.external_model_regex = None
+        external_pattern = os.getenv("EXTERNAL_MODEL_REGEX", "")
+        if external_pattern:
+            try:
+                self.external_model_regex = re.compile(external_pattern, re.IGNORECASE)
+            except re.error as e:
+                logger.warning(
+                    "Invalid EXTERNAL_MODEL_REGEX %r (%s); models stay unclassified", external_pattern, e
+                )
 
         logger.info("Metric groups configuration:")
         logger.info("  Basic metrics: %s", self.enable_basic_metrics)
@@ -76,6 +102,11 @@ class LibreChatMetricsCollector(Collector):
         logger.info("  Rating metrics: %s", self.enable_rating_metrics)
         logger.info("  Tool metrics: %s", self.enable_tool_metrics)
         logger.info("  File metrics: %s", self.enable_file_metrics)
+        logger.info("  Usage window metrics: %s (windows: %s, refresh: %ds, external models: %s)",
+                    self.enable_usage_window_metrics,
+                    ",".join(label for label, _ in self.usage_windows) or "none",
+                    self.usage_metrics_ttl,
+                    self.external_model_regex.pattern if self.external_model_regex else "(not configured)")
 
         self.librechat_url = os.getenv("LIBRECHAT_URL", "")
         logger.info("LibreChat URL (health check): %s", self.librechat_url or "(not configured)")
@@ -269,6 +300,10 @@ class LibreChatMetricsCollector(Collector):
         # File metrics - uploaded files
         if self.enable_file_metrics:
             yield from self.collect_uploaded_file_count()
+
+        # Usage window metrics - users, answers and tokens per model over rolling windows
+        if self.enable_usage_window_metrics and self.usage_windows:
+            yield from self.collect_usage_window_metrics()
 
     def collect_status_code(self):
         """
@@ -1812,6 +1847,159 @@ class LibreChatMetricsCollector(Collector):
             )
         except Exception as e:
             logger.exception("Error collecting active tool users: %s", e)
+
+    @staticmethod
+    def _parse_usage_windows(spec):
+        """
+        Parse a comma-separated window list such as "1d,7d,30d" (units h and d)
+        into [(label, timedelta)], shortest first. Invalid entries are skipped.
+        """
+        windows = []
+        for item in (part.strip() for part in spec.split(",")):
+            match = re.fullmatch(r"([1-9]\d*)([hd])", item)
+            if not match:
+                if item:
+                    logger.warning("Ignoring invalid USAGE_WINDOWS entry %r (expected e.g. 12h or 7d)", item)
+                continue
+            amount = int(match.group(1))
+            windows.append((item, timedelta(hours=amount) if match.group(2) == "h" else timedelta(days=amount)))
+        return sorted(windows, key=lambda window: window[1])
+
+    def _model_class(self, model):
+        """Return "external" or "local" for a model, or "unclassified" without EXTERNAL_MODEL_REGEX."""
+        if self.external_model_regex is None:
+            return "unclassified"
+        return "external" if self.external_model_regex.search(model) else "local"
+
+    def collect_usage_window_metrics(self):
+        """
+        Yield the usage window metrics, recomputed at most every USAGE_METRICS_TTL
+        seconds (on every collection when the cache is disabled).
+        """
+        now = time.time()
+        stale = (
+            not self.cache_enabled
+            or self._usage_cache is None
+            or now - self._usage_cache_timestamp >= self.usage_metrics_ttl
+        )
+        if stale:
+            try:
+                self._usage_cache = list(self._build_usage_window_metrics())
+                self._usage_cache_timestamp = now
+            except Exception as e:
+                logger.exception("Error collecting usage window metrics: %s", e)
+                self._usage_cache = None
+                return
+        yield from self._usage_cache
+
+    def _build_usage_window_metrics(self):
+        """
+        Collect users, answers and tokens per model over each rolling window.
+
+        Users and tokens come from the transactions collection, which records the
+        model that actually ran, for agents too. Answers come from the messages
+        collection, where an agent's answers carry the agent id; those are mapped
+        to the agent's current model.
+        """
+        # PyMongo returns naive UTC datetimes, so compare against naive UTC.
+        now = datetime.now(timezone.utc).replace(tzinfo=None)
+        starts = [(label, now - delta) for label, delta in self.usage_windows]
+        oldest = starts[-1][1]
+
+        def per_window(value):
+            """$group accumulators that sum value once for every window a document falls in."""
+            return {
+                f"w{i}": {"$sum": {"$cond": [{"$gte": ["$createdAt", start]}, value, 0]}}
+                for i, (_, start) in enumerate(starts)
+            }
+
+        chat_requests = {"createdAt": {"$gte": oldest}, "context": {"$in": CHAT_CONTEXTS}}
+        transactions = self.db["transactions"]
+
+        # A user used a model within a window if their latest request to it falls
+        # inside, so one grouping answers every window.
+        users = [{} for _ in starts]  # per window: user -> [used local, used external]
+        for row in transactions.aggregate([
+            {"$match": {**chat_requests, "tokenType": "prompt"}},
+            {"$group": {"_id": {"user": "$user", "model": "$model"}, "last": {"$max": "$createdAt"}}},
+        ]):
+            external = self._model_class(row["_id"].get("model") or "unknown") == "external"
+            for i, (_, start) in enumerate(starts):
+                if row["last"] >= start:
+                    used = users[i].setdefault(row["_id"].get("user"), [False, False])
+                    used[1 if external else 0] = True
+
+        unique_users = GaugeMetricFamily(
+            "librechat_window_unique_users",
+            "Number of unique users with at least one chat request in the rolling window",
+            labels=["window"],
+        )
+        for i, (label, _) in enumerate(starts):
+            unique_users.add_metric([label], len(users[i]))
+        yield unique_users
+
+        if self.external_model_regex is not None:
+            users_by_class = GaugeMetricFamily(
+                "librechat_window_users_by_model_class",
+                "Number of unique users in the rolling window by the model classes they used",
+                labels=["window", "usage"],
+            )
+            for i, (label, _) in enumerate(starts):
+                counts = {"local_only": 0, "external_only": 0, "both": 0}
+                for used_local, used_external in users[i].values():
+                    if used_local and used_external:
+                        counts["both"] += 1
+                    elif used_external:
+                        counts["external_only"] += 1
+                    else:
+                        counts["local_only"] += 1
+                for usage, count in counts.items():
+                    users_by_class.add_metric([label, usage], count)
+            yield users_by_class
+
+        agent_models = {
+            agent.get("id"): agent.get("model")
+            for agent in self.db["agents"].find({}, {"id": 1, "model": 1})
+        }
+        answers = {}  # model -> count per window
+        for row in self.messages_collection.aggregate([
+            {"$match": {"createdAt": {"$gte": oldest}, "isCreatedByUser": False, "error": {"$ne": True}}},
+            {"$group": {"_id": {"endpoint": "$endpoint", "model": "$model"}, **per_window(1)}},
+        ]):
+            model = row["_id"].get("model") or "unknown"
+            if row["_id"].get("endpoint") == "agents" or model.startswith("agent_"):
+                model = agent_models.get(model) or "unknown"
+            counts = answers.setdefault(model, [0] * len(starts))
+            for i in range(len(starts)):
+                counts[i] += row[f"w{i}"]
+
+        answers_per_model = GaugeMetricFamily(
+            "librechat_window_answers_per_model",
+            "Number of assistant answers (without errors) per model in the rolling window",
+            labels=["window", "model", "class"],
+        )
+        for model, counts in answers.items():
+            for i, (label, _) in enumerate(starts):
+                answers_per_model.add_metric([label, model, self._model_class(model)], counts[i])
+        yield answers_per_model
+
+        tokens_per_model = GaugeMetricFamily(
+            "librechat_window_tokens_per_model",
+            "Number of tokens of chat requests per model in the rolling window",
+            labels=["window", "model", "class", "type"],
+        )
+        for row in transactions.aggregate([
+            {"$match": {**chat_requests, "tokenType": {"$in": ["prompt", "completion"]}}},
+            {"$group": {
+                "_id": {"model": "$model", "tokenType": "$tokenType"},
+                **per_window({"$abs": "$rawAmount"}),
+            }},
+        ]):
+            model = row["_id"].get("model") or "unknown"
+            token_type = "input" if row["_id"]["tokenType"] == "prompt" else "output"
+            for i, (label, _) in enumerate(starts):
+                tokens_per_model.add_metric([label, model, self._model_class(model), token_type], row[f"w{i}"])
+        yield tokens_per_model
 
 
 if __name__ == "__main__":
