@@ -18,9 +18,11 @@ The script connects to the MongoDB database used by LibreChat, aggregates releva
   - **Error tracking per model** (requests rejected before generation and failures during generation)
   - **Active users and conversations**
   - **Chat rating metrics** (thumbs up/down, feedback tags, model performance)
-  - **Tool usage metrics** (tool calls, success rates, per-model/endpoint breakdown)
+  - **Tool usage metrics** (tool calls, success rates, per-model/endpoint breakdown, calls and failures per MCP server)
   - **Real-time activity monitoring** (5-minute windows)
-  - **Usage per model over rolling windows** (e.g. 1d/7d/30d): unique users, answers, tokens, prompt-cache tokens and credits charged, optionally split into local and external models
+  - **Usage per model over rolling windows** (e.g. 1d/7d/30d): unique users, answers, stopped answers, tokens of chat and background requests, prompt-cache tokens and credits charged, optionally split into local and external models
+  - **Balance metrics**: users who ran out of credits or are close to it, and requests rejected before generation by reason
+  - **Feature metrics**: memories, agents, skills, projects, shared links, MCP servers, agent API keys, temporary chats, scheduled runs, logged-in and new users
 - **Chat Rating Analytics**:
   - Track user satisfaction with thumbs up/down ratings
   - Analyze model performance and quality feedback
@@ -142,13 +144,21 @@ ENABLE_FILE_METRICS=true
 # Usage window metrics: unique users, answers and tokens per model over rolling windows
 ENABLE_USAGE_WINDOW_METRICS=true
 
+# Balance metrics: users per balance state (exhausted, low, ok)
+ENABLE_BALANCE_METRICS=true
+
+# Feature metrics: memories, agents, skills, projects, shared links, MCP servers,
+# agent API keys and temporary chats. Refreshed every USAGE_METRICS_TTL seconds.
+ENABLE_FEATURE_METRICS=true
+
 # ===== Usage Window Metrics =====
 # Rolling windows (units: h, d). Keep the longest within your data retention:
 # deleted chats drop out of the counts.
 USAGE_WINDOWS=1d,7d,30d
 
-# How often the usage window metrics are recomputed, in seconds. They scan up to
-# the longest window, so they refresh less often than the other metrics.
+# How often the usage window and feature metrics are recomputed, in seconds. The
+# usage window metrics scan up to the longest window, so they refresh less often
+# than the other metrics.
 USAGE_METRICS_TTL=900
 
 # Optional, case-insensitive regex (Python syntax) for models run by a third party.
@@ -180,6 +190,8 @@ ENABLE_TIME_WINDOW_METRICS=false   # Disable 5-minute windows
 ENABLE_RATING_METRICS=false        # Disable rating metrics
 ENABLE_TOOL_METRICS=false          # Disable tool metrics
 ENABLE_FILE_METRICS=true           # Keep file counts
+ENABLE_BALANCE_METRICS=true        # Keep balance states (one pass over balances)
+ENABLE_FEATURE_METRICS=true        # Keep feature counts (mostly small collections)
 ```
 
 ### 4. Run the Script
@@ -446,6 +458,18 @@ librechat_messages_with_tools_total 92.0
 # TYPE librechat_active_tool_users gauge
 librechat_active_tool_users 2.0
 
+# HELP librechat_mcp_tool_calls_per_server Number of MCP tool calls per MCP server
+# TYPE librechat_mcp_tool_calls_per_server gauge
+librechat_mcp_tool_calls_per_server{server="github"} 42.0
+
+# HELP librechat_mcp_tool_call_errors_per_server Number of failed MCP tool calls per MCP server
+# TYPE librechat_mcp_tool_call_errors_per_server gauge
+librechat_mcp_tool_call_errors_per_server{server="github"} 3.0
+
+# HELP librechat_logged_in_users Number of users with a login session that has not expired
+# TYPE librechat_logged_in_users gauge
+librechat_logged_in_users 298.0
+
 # HELP librechat_window_unique_users Number of unique users with at least one chat request in the rolling window
 # TYPE librechat_window_unique_users gauge
 librechat_window_unique_users{window="7d"} 412.0
@@ -475,6 +499,76 @@ librechat_window_cache_tokens_per_model{class="external",model="claude-haiku-4-5
 # TYPE librechat_window_credits_per_model gauge
 librechat_window_credits_per_model{class="external",context="message",model="gemini-3.8-flash",type="input",window="7d"} 3.9e+07
 librechat_window_credits_per_model{class="external",context="title",model="gemini-3.5-flash-lite",type="input",window="7d"} 5.1e+05
+
+# HELP librechat_window_background_tokens_per_model Number of tokens of background requests (title generation, summarization, image generation, ...) per model and transaction context in the rolling window
+# TYPE librechat_window_background_tokens_per_model gauge
+librechat_window_background_tokens_per_model{class="external",context="title",model="gemini-3.5-flash-lite",type="input",window="7d"} 6.2e+05
+librechat_window_background_tokens_per_model{class="external",context="summarization",model="gemini-3.8-flash",type="input",window="7d"} 1.1e+06
+
+# HELP librechat_window_unfinished_answers_per_model Number of assistant answers (without errors) per model in the rolling window that were stopped before they finished
+# TYPE librechat_window_unfinished_answers_per_model gauge
+librechat_window_unfinished_answers_per_model{class="external",model="gemini-3.8-flash",window="7d"} 12.0
+
+# HELP librechat_window_rejected_requests Number of requests rejected before generation per reason in the rolling window
+# TYPE librechat_window_rejected_requests gauge
+librechat_window_rejected_requests{reason="token_balance",window="7d"} 7.0
+librechat_window_rejected_requests{reason="illegal_model_request",window="7d"} 4.0
+
+# HELP librechat_window_new_users Number of users who registered in the rolling window
+# TYPE librechat_window_new_users gauge
+librechat_window_new_users{window="7d"} 35.0
+
+# HELP librechat_window_agent_api_keys_used Number of agent API keys last used in the rolling window
+# TYPE librechat_window_agent_api_keys_used gauge
+librechat_window_agent_api_keys_used{window="7d"} 4.0
+
+# HELP librechat_window_schedule_runs Number of scheduled chat runs per status in the rolling window
+# TYPE librechat_window_schedule_runs gauge
+librechat_window_schedule_runs{status="success",window="7d"} 20.0
+librechat_window_schedule_runs{status="error",window="7d"} 1.0
+
+# HELP librechat_balance_users Number of users per balance state (exhausted, low, ok)
+# TYPE librechat_balance_users gauge
+librechat_balance_users{state="exhausted"} 23.0
+librechat_balance_users{state="low"} 60.0
+librechat_balance_users{state="ok"} 1217.0
+
+# HELP librechat_memory_entries_total Number of memory entries saved for users
+# TYPE librechat_memory_entries_total gauge
+librechat_memory_entries_total 4374.0
+
+# HELP librechat_memory_users Number of users with at least one memory entry
+# TYPE librechat_memory_users gauge
+librechat_memory_users 453.0
+
+# HELP librechat_agents_total Number of agents per category
+# TYPE librechat_agents_total gauge
+librechat_agents_total{category="general"} 81.0
+librechat_agents_total{category="uncategorized"} 3.0
+
+# HELP librechat_skills_total Number of skills
+# TYPE librechat_skills_total gauge
+librechat_skills_total 13.0
+
+# HELP librechat_chat_projects_total Number of chat projects
+# TYPE librechat_chat_projects_total gauge
+librechat_chat_projects_total 62.0
+
+# HELP librechat_shared_links_total Number of shared conversation links
+# TYPE librechat_shared_links_total gauge
+librechat_shared_links_total 16.0
+
+# HELP librechat_mcp_servers_total Number of MCP servers added in LibreChat (not librechat.yaml)
+# TYPE librechat_mcp_servers_total gauge
+librechat_mcp_servers_total 16.0
+
+# HELP librechat_agent_api_keys_total Number of agent API keys
+# TYPE librechat_agent_api_keys_total gauge
+librechat_agent_api_keys_total 23.0
+
+# HELP librechat_temporary_conversations Number of temporary conversations stored in the database
+# TYPE librechat_temporary_conversations gauge
+librechat_temporary_conversations 27.0
 ```
 
 ### Usage window metrics
@@ -487,7 +581,8 @@ old chats are deleted and a share over time is a plain ratio:
   records the model that actually ran, for agents too. Users and tokens count
   chat requests only: the contexts `message`, `incomplete` and, from LibreChat
   v0.8.8, `abort` (stopped turns) and `subagent`. Title generation,
-  summarization, memory and image generation are left out.
+  summarization, memory and image generation are left out; their tokens are in
+  `librechat_window_background_tokens_per_model`, with the context as a label.
   LibreChat records transactions unless `transactions.enabled` is `false`.
 - `librechat_window_credits_per_model` covers every charged request, with the
   transaction `context` as a label, so background tasks such as title
@@ -499,7 +594,17 @@ old chats are deleted and a share over time is a plain ratio:
   the provider's prompt cache. They are part of the input tokens.
 - Answers come from the `messages` collection (assistant messages without
   errors). An agent's answers carry the agent id and are counted under the
-  agent's current model.
+  agent's current model. `librechat_window_unfinished_answers_per_model`
+  counts the answers that were stopped before they finished.
+- `librechat_window_rejected_requests` counts requests LibreChat refused before
+  generating an answer, by the reason it recorded: `token_balance` (not enough
+  credits), `illegal_model_request` (model not allowed), and so on. Other
+  messages flagged as errors, such as failed answers from endpoints outside
+  the agents flow in older LibreChat versions, count as `other`.
+- `librechat_window_new_users` counts registrations,
+  `librechat_window_agent_api_keys_used` agent API keys last used, and
+  `librechat_window_schedule_runs` scheduled chat runs by status (LibreChat
+  v0.8.8+).
 - A user counts as `both` when they used at least one local and one external
   model in the window. The three `usage` values add up to
   `librechat_window_unique_users`.
@@ -533,6 +638,50 @@ Share of input tokens served from the prompt cache per model:
 librechat_window_cache_tokens_per_model{window="7d", type="read"}
   / ignoring (type) librechat_window_tokens_per_model{window="7d", type="input"}
 ```
+
+Requests rejected for lack of credits in the last day:
+
+```promql
+librechat_window_rejected_requests{window="1d", reason="token_balance"}
+```
+
+### Balance metrics
+
+`librechat_balance_users` counts users by the credits left in their balance
+(`balances` collection, used when LibreChat's `balance.enabled` is `true`):
+
+- `exhausted`: no credits left.
+- `low`: below 10% of the user's refill amount. Users without a refill amount
+  are never `low`.
+- `ok`: everyone else.
+
+The three states add up to the number of balances.
+
+### Tool errors
+
+A tool call counts as failed when its output is an error in one of the forms
+LibreChat and MCP servers report: `Error processing tool ...`,
+`Error: ... tool call failed: ...`, `Error: ... Please fix your mistakes.` or
+`Error calling tool ...`. An output that only mentions an error, such as a
+search result about error handling, does not count.
+
+`librechat_mcp_tool_calls_per_server` and
+`librechat_mcp_tool_call_errors_per_server` group the calls of MCP tools, which
+LibreChat names `<tool>_mcp_<server>`, by server. A tool name a model made up
+can show up as its own server.
+
+### Feature metrics
+
+Counts of the features people use: memory entries and the users who have them,
+agents per category, skills, chat projects, shared links, MCP servers added in
+LibreChat (servers configured in `librechat.yaml` are not stored in the
+database), agent API keys and temporary chats. `librechat_logged_in_users`
+counts users with a login session that has not expired; it is part of the user
+metrics.
+
+The feature metrics are refreshed every `USAGE_METRICS_TTL` seconds. A
+collection that the LibreChat version doesn't have, such as `skills` before
+skills existed, yields no metric rather than a 0.
 
 ## Development
 

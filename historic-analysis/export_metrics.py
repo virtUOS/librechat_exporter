@@ -455,9 +455,9 @@ class MetricsCalculator:
                         if user:
                             tokens_by_user[user]['output'] += token_count
             
-            # Error counts. Rejected requests are flagged with error: true; from
-            # LibreChat v0.8.7 a failure during generation is stored as an error
-            # content part instead, with error: false.
+            # Error counts. Rejected requests are flagged with error: true; the
+            # agents flow stores a failure during generation as an error content
+            # part instead, with error: false.
             if message.get('error') or any(
                 isinstance(part, dict) and part.get('type') == 'error'
                 for part in message.get('content') or ()
