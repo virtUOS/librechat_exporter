@@ -48,7 +48,8 @@ jobs:
               updatedAt: ISODate("3025-01-15T21:31:09.989Z")
             });
             db.users.insertOne({
-              username: "jdoe"
+              username: "jdoe",
+              createdAt: ISODate("3025-01-15T21:31:09.989Z")
             });
             db.transactions.insertMany([
               { user: ObjectId("000000000000000000000001"), model: "gemini-flash", context: "message",
@@ -78,7 +79,61 @@ jobs:
                 content: [{ type: "text", text: "partial" }, { type: "error", error: "upstream failed" }],
                 createdAt: ISODate("3025-01-15T21:31:09.989Z") },
               { isCreatedByUser: false, endpoint: "google", model: "gemini-flash", error: true,
-                text: "{\"type\":\"token_balance\"}", createdAt: ISODate("3025-01-15T21:31:09.989Z") }
+                text: "{\"type\":\"token_balance\"}", createdAt: ISODate("3025-01-15T21:31:09.989Z") },
+              { isCreatedByUser: false, endpoint: "custom", model: "legacy-model", error: true,
+                text: "Something went wrong", createdAt: ISODate("3025-01-15T21:31:09.989Z") },
+              { isCreatedByUser: false, endpoint: "google", model: "gemini-flash", unfinished: true,
+                createdAt: ISODate("3025-01-15T21:31:09.989Z") },
+              { isCreatedByUser: false, endpoint: "google", model: "gemini-flash",
+                content: [
+                  { type: "tool_call", tool_call: { name: "search_mcp_mcp-uos", output: "found" } },
+                  { type: "tool_call", tool_call: { name: "search_mcp_mcp-uos", output: "Error processing tool search" } },
+                  { type: "tool_call", tool_call: { name: "fetch_mcp_mcp-uos", output: "Error calling tool 'fetch': 404 Not Found" } },
+                  { type: "tool_call", tool_call: { name: "web_search", output: "found" } },
+                  { type: "tool_call", tool_call: { name: "web_search", output: "Found 3 results about error handling" } },
+                  { type: "tool_call", tool_call: { name: "web_search",
+                    output: "Error: Received tool input did not match expected schema\n Please fix your mistakes." } },
+                  { type: "tool_call", tool_call: { name: "web_search", output: "Error: [timeout] tool call failed: no response" } }
+                ],
+                createdAt: ISODate("3025-01-15T21:31:09.989Z") }
+            ]);
+            db.sessions.insertMany([
+              { user: ObjectId("000000000000000000000001"), expiration: ISODate("3025-01-15T21:31:09.989Z") },
+              { user: ObjectId("000000000000000000000001"), expiration: ISODate("3025-01-15T21:31:09.989Z") },
+              { user: ObjectId("000000000000000000000002"), expiration: ISODate("2020-01-15T21:31:09.989Z") }
+            ]);
+            db.balances.insertMany([
+              { user: ObjectId("000000000000000000000001"), tokenCredits: 0, refillAmount: 1000 },
+              { user: ObjectId("000000000000000000000002"), tokenCredits: 50, refillAmount: 1000 },
+              { user: ObjectId("000000000000000000000003"), tokenCredits: 500, refillAmount: 1000 },
+              { user: ObjectId("000000000000000000000004"), tokenCredits: 50 }
+            ]);
+            db.memoryentries.insertMany([
+              { userId: ObjectId("000000000000000000000001"), key: "a", value: "x" },
+              { userId: ObjectId("000000000000000000000001"), key: "b", value: "y" },
+              { userId: ObjectId("000000000000000000000002"), key: "a", value: "z" }
+            ]);
+            db.agents.insertMany([
+              { id: "agent_a", model: "gemini-flash", category: "general" },
+              { id: "agent_b", model: "gemini-flash", category: "general" },
+              { id: "agent_c", model: "local-llm" }
+            ]);
+            db.skills.insertOne({ name: "summarize" });
+            db.sharedlinks.insertMany([{ shareId: "s1" }, { shareId: "s2" }]);
+            db.mcpservers.insertOne({ serverName: "mcp-uos" });
+            db.agentapikeys.insertMany([
+              { name: "used", lastUsedAt: ISODate("3025-01-15T21:31:09.989Z") },
+              { name: "unused" }
+            ]);
+            db.conversations.insertMany([
+              { conversationId: "temporary", isTemporary: true, expiredAt: ISODate("3025-01-15T21:31:09.989Z") },
+              { conversationId: "temporary-before-v0.8.6", expiredAt: ISODate("3025-01-15T21:31:09.989Z") },
+              { conversationId: "retained", isTemporary: false, expiredAt: ISODate("3025-01-15T21:31:09.989Z") }
+            ]);
+            db.scheduleruns.insertMany([
+              { status: "success", createdAt: ISODate("3025-01-15T21:31:09.989Z") },
+              { status: "success", createdAt: ISODate("3025-01-15T21:31:09.989Z") },
+              { status: "error", createdAt: ISODate("3025-01-15T21:31:09.989Z") }
             ]);
             quit;' | docker exec -i mongo mongosh LibreChat
 
@@ -115,14 +170,20 @@ jobs:
         run: grep 'librechat_status_code' metrics
 
       # Errors are either flagged on the message (rejected requests) or stored as
-      # an error content part (failures during generation, LibreChat v0.8.7+).
+      # an error content part (failures during generation in the agents flow).
       - name: probe for error metrics
         run: |
-          grep '^librechat_error_messages_total 2.0' metrics
+          grep '^librechat_error_messages_total 3.0' metrics
           grep '^librechat_errors_per_model_total{model="local-llm"} 1.0' metrics
           grep '^librechat_errors_per_model_total{model="gemini-flash"} 1.0' metrics
-          grep '^librechat_error_messages_5m 2.0' metrics
+          grep '^librechat_error_messages_5m 3.0' metrics
           grep '^librechat_errors_per_model_5m{model="local-llm"} 1.0' metrics
+
+      # Requests rejected before generation, by the type LibreChat records.
+      - name: probe for rejected request metrics
+        run: |
+          grep '^librechat_window_rejected_requests{' metrics | grep 'reason="token_balance"' | grep 'window="1d"' | grep ' 1.0$'
+          grep '^librechat_window_rejected_requests{' metrics | grep 'reason="other"' | grep 'window="1d"' | grep ' 1.0$'
 
       # Label order in the output depends on the prometheus-client version, so
       # match each label separately. The title transaction must not count, the
@@ -151,3 +212,56 @@ jobs:
           credits abort input 300.0
           credits subagent output 500.0
           if grep -q 'context="autoRefill"' metrics; then echo "credit refills must not count"; exit 1; fi
+
+      # Background requests only; chat requests are in librechat_window_tokens_per_model.
+      - name: probe for background token metrics
+        run: |
+          grep '^librechat_window_background_tokens_per_model{' metrics | grep 'model="gemini-flash"' | grep 'context="title"' | grep 'type="input"' | grep 'window="1d"' | grep ' 100.0$'
+          if grep '^librechat_window_background_tokens_per_model{' metrics | grep -q 'context="message"'; then
+            echo "chat requests must not count as background"; exit 1
+          fi
+
+      - name: probe for unfinished answer metrics
+        run: |
+          grep '^librechat_window_unfinished_answers_per_model{' metrics | grep 'model="gemini-flash"' | grep 'window="1d"' | grep ' 1.0$'
+          grep '^librechat_window_unfinished_answers_per_model{' metrics | grep 'model="local-llm"' | grep 'window="1d"' | grep ' 0.0$'
+
+      # Exhausted: no credits left. Low: below 10% of the refill amount.
+      - name: probe for balance metrics
+        run: |
+          grep '^librechat_balance_users{state="exhausted"} 1.0' metrics
+          grep '^librechat_balance_users{state="low"} 1.0' metrics
+          grep '^librechat_balance_users{state="ok"} 2.0' metrics
+
+      # Failed tool calls, in the forms LibreChat and MCP servers report them. An
+      # output that merely mentions an error is not a failure.
+      - name: probe for tool error metrics
+        run: |
+          grep '^librechat_tool_call_errors_total 4.0' metrics
+          grep '^librechat_tool_call_errors_per_tool_total{tool_name="web_search"} 2.0' metrics
+          grep '^librechat_tool_call_errors_per_tool_total{tool_name="fetch_mcp_mcp-uos"} 1.0' metrics
+
+      # MCP tools are named <tool>_mcp_<server>.
+      - name: probe for MCP metrics
+        run: |
+          grep '^librechat_mcp_tool_calls_per_server{server="mcp-uos"} 3.0' metrics
+          grep '^librechat_mcp_tool_call_errors_per_server{server="mcp-uos"} 2.0' metrics
+
+      # A collection the LibreChat version does not have yields no metric.
+      - name: probe for feature adoption metrics
+        run: |
+          grep '^librechat_logged_in_users 1.0' metrics
+          grep '^librechat_window_new_users{window="1d"} 1.0' metrics
+          grep '^librechat_memory_entries_total 3.0' metrics
+          grep '^librechat_memory_users 2.0' metrics
+          grep '^librechat_agents_total{category="general"} 2.0' metrics
+          grep '^librechat_agents_total{category="uncategorized"} 1.0' metrics
+          grep '^librechat_skills_total 1.0' metrics
+          grep '^librechat_shared_links_total 2.0' metrics
+          grep '^librechat_mcp_servers_total 1.0' metrics
+          grep '^librechat_agent_api_keys_total 2.0' metrics
+          grep '^librechat_window_agent_api_keys_used{window="1d"} 1.0' metrics
+          grep '^librechat_temporary_conversations 2.0' metrics
+          grep '^librechat_window_schedule_runs{' metrics | grep 'status="success"' | grep 'window="1d"' | grep ' 2.0$'
+          grep '^librechat_window_schedule_runs{' metrics | grep 'status="error"' | grep 'window="1d"' | grep ' 1.0$'
+          if grep -q '^librechat_chat_projects_total' metrics; then echo "a missing collection must not be reported"; exit 1; fi

@@ -1,3 +1,4 @@
+import json
 import logging
 import os
 import re
@@ -34,10 +35,43 @@ logger.debug("Set log level to %s", logging.getLevelName(logger.getEffectiveLeve
 CHAT_CONTEXTS = ["message", "incomplete", "abort", "subagent"]
 
 # Messages that failed. A request rejected before generation (e.g. no credits
-# left) is flagged with error: true; from LibreChat v0.8.7 a failure during
-# generation is stored as an error content part instead, with error: false.
+# left) is flagged with error: true. The agents flow, which recent LibreChat
+# versions use for every endpoint, stores a failure during generation as an
+# error content part instead, with error: false.
 ERROR_MESSAGE = {"$or": [{"error": True}, {"content.type": "error"}]}
 NOT_ERROR_MESSAGE = {"error": {"$ne": True}, "content.type": {"$ne": "error"}}
+
+# Temporary chats are flagged with isTemporary from LibreChat v0.8.6. Before
+# that, an expiry date marked them; from v0.8.8 regular chats can expire too.
+TEMPORARY_CONVERSATION = {"$or": [
+    {"isTemporary": True},
+    {"isTemporary": {"$exists": False}, "expiredAt": {"$ne": None}},
+]}
+
+# MCP tools are named <tool>_mcp_<server>; LibreChat takes the last part as the server.
+MCP_DELIMITER = "_mcp_"
+
+# A balance is "low" below this share of the user's refill amount.
+LOW_BALANCE_FRACTION = 0.1
+
+# Collections counted as-is by the feature metrics: (metric, collection, help).
+FEATURE_COUNTS = [
+    ("librechat_memory_entries_total", "memoryentries", "Number of memory entries saved for users"),
+    ("librechat_skills_total", "skills", "Number of skills"),
+    ("librechat_chat_projects_total", "chatprojects", "Number of chat projects"),
+    ("librechat_shared_links_total", "sharedlinks", "Number of shared conversation links"),
+    ("librechat_mcp_servers_total", "mcpservers", "Number of MCP servers added in LibreChat (not librechat.yaml)"),
+    ("librechat_agent_api_keys_total", "agentapikeys", "Number of agent API keys"),
+]
+
+
+def rejection_reason(text):
+    """Return the type LibreChat records for a rejected request, or "other"."""
+    try:
+        reason = json.loads(text).get("type")
+    except (TypeError, ValueError, AttributeError):
+        return "other"
+    return reason if isinstance(reason, str) and re.fullmatch(r"[A-Za-z_]{1,40}", reason) else "other"
 
 
 class LibreChatMetricsCollector(Collector):
@@ -81,13 +115,15 @@ class LibreChatMetricsCollector(Collector):
         self.enable_tool_metrics = os.getenv("ENABLE_TOOL_METRICS", "true").lower() == "true"
         self.enable_file_metrics = os.getenv("ENABLE_FILE_METRICS", "true").lower() == "true"
         self.enable_usage_window_metrics = os.getenv("ENABLE_USAGE_WINDOW_METRICS", "true").lower() == "true"
+        self.enable_balance_metrics = os.getenv("ENABLE_BALANCE_METRICS", "true").lower() == "true"
+        self.enable_feature_metrics = os.getenv("ENABLE_FEATURE_METRICS", "true").lower() == "true"
 
         # Rolling windows for the usage window metrics. They scan up to the longest
-        # window, so they are recomputed at most every USAGE_METRICS_TTL seconds.
+        # window, so they and the feature metrics are recomputed at most every
+        # USAGE_METRICS_TTL seconds.
         self.usage_windows = self._parse_usage_windows(os.getenv("USAGE_WINDOWS", "1d,7d,30d"))
         self.usage_metrics_ttl = int(os.getenv("USAGE_METRICS_TTL", "900"))
-        self._usage_cache = None
-        self._usage_cache_timestamp = None
+        self._slow_caches = {}  # metric group -> (timestamp, metrics)
 
         # Models whose name matches this regex count as "external" (run by a third
         # party), all others as "local". Unset: models stay unclassified.
@@ -110,6 +146,8 @@ class LibreChatMetricsCollector(Collector):
         logger.info("  Rating metrics: %s", self.enable_rating_metrics)
         logger.info("  Tool metrics: %s", self.enable_tool_metrics)
         logger.info("  File metrics: %s", self.enable_file_metrics)
+        logger.info("  Balance metrics: %s", self.enable_balance_metrics)
+        logger.info("  Feature metrics: %s", self.enable_feature_metrics)
         logger.info("  Usage window metrics: %s (windows: %s, refresh: %ds, external models: %s)",
                     self.enable_usage_window_metrics,
                     ",".join(label for label, _ in self.usage_windows) or "none",
@@ -257,6 +295,7 @@ class LibreChatMetricsCollector(Collector):
             yield from self.collect_daily_unique_users()
             yield from self.collect_weekly_unique_users()
             yield from self.collect_monthly_unique_users()
+            yield from self.collect_logged_in_users()
 
         # Model-specific metrics - per-model breakdowns
         if self.enable_model_metrics:
@@ -298,6 +337,7 @@ class LibreChatMetricsCollector(Collector):
             yield from self.collect_tool_call_errors_per_tool()
             yield from self.collect_tool_success_rate_per_tool()
             yield from self.collect_messages_with_tools()
+            yield from self.collect_mcp_tool_calls_per_server()
             if self.enable_time_window_metrics:
                 yield from self.collect_tool_calls_5m()
                 yield from self.collect_tool_calls_per_tool_5m()
@@ -312,6 +352,14 @@ class LibreChatMetricsCollector(Collector):
         # Usage window metrics - users, answers and tokens per model over rolling windows
         if self.enable_usage_window_metrics and self.usage_windows:
             yield from self.collect_usage_window_metrics()
+
+        # Balance metrics - users by remaining credits
+        if self.enable_balance_metrics:
+            yield from self.collect_balance_users()
+
+        # Feature metrics - how much memories, agents, skills etc. are used
+        if self.enable_feature_metrics:
+            yield from self._collect_slow("feature", self._build_feature_metrics)
 
     def collect_status_code(self):
         """
@@ -725,6 +773,28 @@ class LibreChatMetricsCollector(Collector):
             )
         except Exception as e:
             logger.exception("Error collecting monthly unique users: %s", e)
+
+    def collect_logged_in_users(self):
+        """
+        Collect number of users with a login session that has not expired.
+        """
+        try:
+            if "sessions" not in self.db.list_collection_names():
+                return
+            result = list(self.db["sessions"].aggregate([
+                {"$match": {"expiration": {"$gt": datetime.now(timezone.utc)}}},
+                {"$group": {"_id": "$user"}},
+                {"$count": "count"},
+            ]))
+            logged_in = result[0]["count"] if result else 0
+            logger.debug("Logged-in users: %s", logged_in)
+            yield GaugeMetricFamily(
+                "librechat_logged_in_users",
+                "Number of users with a login session that has not expired",
+                value=logged_in,
+            )
+        except Exception as e:
+            logger.exception("Error collecting logged-in users: %s", e)
 
     def collect_messages_5m(self):
         """
@@ -1451,12 +1521,20 @@ class LibreChatMetricsCollector(Collector):
             # ── Query B (all-time): error counts per tool
             # $regexMatch with options:"i" matches both capitalised and lowercase
             # variants emitted by LibreChat (ToolService.js vs assistants/chatV1.js).
+            # The agents framework reports failures as "Error: ... tool call failed:"
+            # or "Error: ...\n Please fix your mistakes." (as LibreChat itself
+            # classifies them), and MCP servers as "Error calling tool ...".
             # An explicit $type guard ensures $regexMatch only ever sees a string;
             # non-string outputs (structured objects, numbers) are mapped to "".
             # We avoid $convert coercion because Azure Cosmos DB / DocumentDB do not
             # take its onError branch for unsupported types, leaking a non-string
             # value into $regexMatch (error 51104). See issue #67.
-            error_regex = "error processing tool"
+            error_regex = (
+                r"error processing tool"
+                r"|^error calling tool"
+                r"|^error:\s*(\[[^\]]*\]\s*)*tool call failed:"
+                r"|^error:[\s\S]*please fix your mistakes\.?\s*$"
+            )
 
             def error_match(field):
                 return {
@@ -1720,6 +1798,44 @@ class LibreChatMetricsCollector(Collector):
         except Exception as e:
             logger.exception("Error collecting tool call errors per tool: %s", e)
 
+    def collect_mcp_tool_calls_per_server(self):
+        """
+        Collect tool calls and failed tool calls per MCP server.
+        Uses cached data from _fetch_all_tool_metrics
+        """
+        try:
+            if self._tool_cache is None:
+                self._fetch_all_tool_metrics()
+
+            calls = GaugeMetricFamily(
+                "librechat_mcp_tool_calls_per_server",
+                "Number of MCP tool calls per MCP server",
+                labels=["server"],
+            )
+            errors = GaugeMetricFamily(
+                "librechat_mcp_tool_call_errors_per_server",
+                "Number of failed MCP tool calls per MCP server",
+                labels=["server"],
+            )
+
+            def per_server(per_tool):
+                counts = {}
+                for tool, count in per_tool.items():
+                    if MCP_DELIMITER in tool:
+                        server = tool.split(MCP_DELIMITER)[-1]
+                        counts[server] = counts.get(server, 0) + count
+                return counts
+
+            server_calls = per_server(self._tool_cache['per_tool'])
+            server_errors = per_server(self._tool_cache['errors_per_tool'])
+            for server, count in server_calls.items():
+                calls.add_metric([server], count)
+                errors.add_metric([server], server_errors.get(server, 0))
+            yield calls
+            yield errors
+        except Exception as e:
+            logger.exception("Error collecting MCP tool calls per server: %s", e)
+
     def collect_tool_success_rate_per_tool(self):
         """
         Collect success rate percentage (0-100) per tool.
@@ -1880,25 +1996,25 @@ class LibreChatMetricsCollector(Collector):
         return "external" if self.external_model_regex.search(model) else "local"
 
     def collect_usage_window_metrics(self):
+        """Yield the usage window metrics."""
+        yield from self._collect_slow("usage window", self._build_usage_window_metrics)
+
+    def _collect_slow(self, group, build):
         """
-        Yield the usage window metrics, recomputed at most every USAGE_METRICS_TTL
+        Yield the metrics of build(), recomputed at most every USAGE_METRICS_TTL
         seconds (on every collection when the cache is disabled).
         """
         now = time.time()
-        stale = (
-            not self.cache_enabled
-            or self._usage_cache is None
-            or now - self._usage_cache_timestamp >= self.usage_metrics_ttl
-        )
-        if stale:
+        cached = self._slow_caches.get(group)
+        if not self.cache_enabled or cached is None or now - cached[0] >= self.usage_metrics_ttl:
             try:
-                self._usage_cache = list(self._build_usage_window_metrics())
-                self._usage_cache_timestamp = now
+                cached = (now, list(build()))
             except Exception as e:
-                logger.exception("Error collecting usage window metrics: %s", e)
-                self._usage_cache = None
+                logger.exception("Error collecting %s metrics: %s", group, e)
+                self._slow_caches.pop(group, None)
                 return
-        yield from self._usage_cache
+            self._slow_caches[group] = cached
+        yield from cached[1]
 
     def _build_usage_window_metrics(self):
         """
@@ -1914,13 +2030,28 @@ class LibreChatMetricsCollector(Collector):
         starts = [(label, now - delta) for label, delta in self.usage_windows]
         oldest = starts[-1][1]
 
-        def per_window(value, prefix="w"):
+        def per_window(value, prefix="w", date="$createdAt"):
             """$group accumulators that sum value once for every window a document falls in."""
             return {
-                f"{prefix}{i}": {"$sum": {"$cond": [{"$gte": ["$createdAt", start]}, value, 0]}}
+                f"{prefix}{i}": {"$sum": {"$cond": [{"$gte": [date, start]}, value, 0]}}
                 for i, (_, start) in enumerate(starts)
             }
 
+        def add(sums, key, row, prefix="w"):
+            """Add the per_window sums of row to sums[key]."""
+            values = sums.setdefault(key, [0] * len(starts))
+            for i in range(len(starts)):
+                values[i] += row[f"{prefix}{i}"]
+
+        def gauge(name, documentation, labels, sums):
+            """A gauge with one sample per window for every key of sums, the values of labels."""
+            metric = GaugeMetricFamily(name, documentation, labels=["window", *labels])
+            for key, values in sums.items():
+                for i, (label, _) in enumerate(starts):
+                    metric.add_metric([label, *key], values[i])
+            return metric
+
+        existing = set(self.db.list_collection_names())
         chat_requests = {"createdAt": {"$gte": oldest}, "context": {"$in": CHAT_CONTEXTS}}
         transactions = self.db["transactions"]
 
@@ -1969,40 +2100,42 @@ class LibreChatMetricsCollector(Collector):
             agent.get("id"): agent.get("model")
             for agent in self.db["agents"].find({}, {"id": 1, "model": 1})
         }
-        answers = {}  # model -> count per window
+        answers = {}     # (model, class) -> per window
+        unfinished = {}  # (model, class) -> per window
         for row in self.messages_collection.aggregate([
             {"$match": {"createdAt": {"$gte": oldest}, "isCreatedByUser": False, **NOT_ERROR_MESSAGE}},
-            {"$group": {"_id": {"endpoint": "$endpoint", "model": "$model"}, **per_window(1)}},
+            {"$group": {
+                "_id": {"endpoint": "$endpoint", "model": "$model"},
+                **per_window(1),
+                **per_window({"$cond": [{"$eq": ["$unfinished", True]}, 1, 0]}, "unfinished"),
+            }},
         ]):
             model = row["_id"].get("model") or "unknown"
             if row["_id"].get("endpoint") == "agents" or model.startswith("agent_"):
                 model = agent_models.get(model) or "unknown"
-            counts = answers.setdefault(model, [0] * len(starts))
-            for i in range(len(starts)):
-                counts[i] += row[f"w{i}"]
+            key = (model, self._model_class(model))
+            add(answers, key, row)
+            add(unfinished, key, row, "unfinished")
 
-        answers_per_model = GaugeMetricFamily(
+        yield gauge(
             "librechat_window_answers_per_model",
             "Number of assistant answers (without errors) per model in the rolling window",
-            labels=["window", "model", "class"],
+            ["model", "class"], answers,
         )
-        for model, counts in answers.items():
-            for i, (label, _) in enumerate(starts):
-                answers_per_model.add_metric([label, model, self._model_class(model)], counts[i])
-        yield answers_per_model
+        yield gauge(
+            "librechat_window_unfinished_answers_per_model",
+            "Number of assistant answers (without errors) per model in the rolling window "
+            "that were stopped before they finished",
+            ["model", "class"], unfinished,
+        )
 
         # One pass over every charged request: tokens and prompt-cache tokens of
         # chat requests, credits of all of them, background tasks included.
         # Charges are stored as negative amounts; credit refills are left out.
-        tokens = {}   # (model, type) -> per window
-        cache = {}    # (model, type) -> per window
-        credits = {}  # (model, context, type) -> per window
-
-        def add(sums, key, row, field):
-            values = sums.setdefault(key, [0] * len(starts))
-            for i in range(len(starts)):
-                values[i] += row[f"{field}{i}"]
-
+        tokens = {}      # (model, class, type) -> per window
+        cache = {}       # (model, class, type) -> per window
+        background = {}  # (model, class, context, type) -> per window
+        credits = {}     # (model, class, context, type) -> per window
         for row in transactions.aggregate([
             {"$match": {"createdAt": {"$gte": oldest}, "tokenType": {"$in": ["prompt", "completion"]}}},
             {"$group": {
@@ -2014,44 +2147,160 @@ class LibreChatMetricsCollector(Collector):
             }},
         ]):
             model = row["_id"].get("model") or "unknown"
+            model_class = self._model_class(model)
             context = row["_id"].get("context") or "unknown"
             is_prompt = row["_id"]["tokenType"] == "prompt"
             token_type = "input" if is_prompt else "output"
-            add(credits, (model, context, token_type), row, "credits")
-            if context in CHAT_CONTEXTS:
-                add(tokens, (model, token_type), row, "tokens")
-                if is_prompt:
-                    add(cache, (model, "read"), row, "read")
-                    add(cache, (model, "write"), row, "write")
+            add(credits, (model, model_class, context, token_type), row, "credits")
+            if context not in CHAT_CONTEXTS:
+                add(background, (model, model_class, context, token_type), row, "tokens")
+                continue
+            add(tokens, (model, model_class, token_type), row, "tokens")
+            if is_prompt:
+                add(cache, (model, model_class, "read"), row, "read")
+                add(cache, (model, model_class, "write"), row, "write")
 
-        tokens_per_model = GaugeMetricFamily(
+        yield gauge(
             "librechat_window_tokens_per_model",
             "Number of tokens of chat requests per model in the rolling window",
-            labels=["window", "model", "class", "type"],
+            ["model", "class", "type"], tokens,
         )
-        cache_tokens_per_model = GaugeMetricFamily(
+        yield gauge(
             "librechat_window_cache_tokens_per_model",
             "Number of input tokens of chat requests read from or written to the prompt cache "
             "per model in the rolling window",
-            labels=["window", "model", "class", "type"],
+            ["model", "class", "type"], cache,
         )
-        for metric, sums in ((tokens_per_model, tokens), (cache_tokens_per_model, cache)):
-            for (model, token_type), values in sums.items():
-                for i, (label, _) in enumerate(starts):
-                    metric.add_metric([label, model, self._model_class(model), token_type], values[i])
-        yield tokens_per_model
-        yield cache_tokens_per_model
-
-        credits_per_model = GaugeMetricFamily(
+        yield gauge(
+            "librechat_window_background_tokens_per_model",
+            "Number of tokens of background requests (title generation, summarization, image "
+            "generation, ...) per model and transaction context in the rolling window",
+            ["model", "class", "context", "type"], background,
+        )
+        yield gauge(
             "librechat_window_credits_per_model",
             "Credits charged per model, transaction context and token type in the rolling window "
             "(1,000,000 credits = 1 USD)",
-            labels=["window", "model", "class", "context", "type"],
+            ["model", "class", "context", "type"], credits,
         )
-        for (model, context, token_type), values in credits.items():
-            for i, (label, _) in enumerate(starts):
-                credits_per_model.add_metric([label, model, self._model_class(model), context, token_type], values[i])
-        yield credits_per_model
+
+        # Requests rejected before generation (e.g. no credits left) store the
+        # reason as JSON in the message text: {"type": "token_balance", ...}.
+        rejected = {}  # (reason,) -> per window
+        for message in self.messages_collection.find(
+            {"createdAt": {"$gte": oldest}, "error": True}, {"text": 1, "createdAt": 1}
+        ):
+            values = rejected.setdefault((rejection_reason(message.get("text")),), [0] * len(starts))
+            for i, (_, start) in enumerate(starts):
+                if message["createdAt"] >= start:
+                    values[i] += 1
+        yield gauge(
+            "librechat_window_rejected_requests",
+            "Number of requests rejected before generation per reason in the rolling window",
+            ["reason"], rejected,
+        )
+
+        new_users = {(): [0] * len(starts)}
+        for row in self.db["users"].aggregate([
+            {"$match": {"createdAt": {"$gte": oldest}}},
+            {"$group": {"_id": None, **per_window(1)}},
+        ]):
+            add(new_users, (), row)
+        yield gauge(
+            "librechat_window_new_users",
+            "Number of users who registered in the rolling window",
+            [], new_users,
+        )
+
+        if "agentapikeys" in existing:
+            keys_used = {(): [0] * len(starts)}
+            for row in self.db["agentapikeys"].aggregate([
+                {"$match": {"lastUsedAt": {"$gte": oldest}}},
+                {"$group": {"_id": None, **per_window(1, date="$lastUsedAt")}},
+            ]):
+                add(keys_used, (), row)
+            yield gauge(
+                "librechat_window_agent_api_keys_used",
+                "Number of agent API keys last used in the rolling window",
+                [], keys_used,
+            )
+
+        if "scheduleruns" in existing:
+            schedule_runs = {}  # (status,) -> per window
+            for row in self.db["scheduleruns"].aggregate([
+                {"$match": {"createdAt": {"$gte": oldest}}},
+                {"$group": {"_id": "$status", **per_window(1)}},
+            ]):
+                add(schedule_runs, (row["_id"] or "unknown",), row)
+            yield gauge(
+                "librechat_window_schedule_runs",
+                "Number of scheduled chat runs per status in the rolling window",
+                ["status"], schedule_runs,
+            )
+
+    def _build_feature_metrics(self):
+        """
+        Collect how much features such as memories, agents and skills are used.
+        A collection the LibreChat version does not have yields no metric.
+        """
+        existing = set(self.db.list_collection_names())
+        for name, collection, documentation in FEATURE_COUNTS:
+            if collection in existing:
+                yield GaugeMetricFamily(name, documentation, value=self.db[collection].estimated_document_count())
+
+        if "memoryentries" in existing:
+            result = list(self.db["memoryentries"].aggregate([{"$group": {"_id": "$userId"}}, {"$count": "count"}]))
+            yield GaugeMetricFamily(
+                "librechat_memory_users",
+                "Number of users with at least one memory entry",
+                value=result[0]["count"] if result else 0,
+            )
+
+        if "agents" in existing:
+            categories = {}
+            for row in self.db["agents"].aggregate([{"$group": {"_id": "$category", "count": {"$sum": 1}}}]):
+                category = row["_id"] or "uncategorized"
+                categories[category] = categories.get(category, 0) + row["count"]
+            agents = GaugeMetricFamily("librechat_agents_total", "Number of agents per category", labels=["category"])
+            for category, count in categories.items():
+                agents.add_metric([str(category)], count)
+            yield agents
+
+        if "conversations" in existing:
+            yield GaugeMetricFamily(
+                "librechat_temporary_conversations",
+                "Number of temporary conversations stored in the database",
+                value=self.db["conversations"].count_documents(TEMPORARY_CONVERSATION),
+            )
+
+    def collect_balance_users(self):
+        """
+        Collect number of users per balance state: exhausted (no credits left), low
+        (below LOW_BALANCE_FRACTION of the refill amount) or ok.
+        """
+        try:
+            if "balances" not in self.db.list_collection_names():
+                return
+            credits = {"$ifNull": ["$tokenCredits", 0]}
+            low_limit = {"$multiply": [{"$ifNull": ["$refillAmount", 0]}, LOW_BALANCE_FRACTION]}
+            result = list(self.db["balances"].aggregate([{"$group": {
+                "_id": None,
+                "total": {"$sum": 1},
+                "exhausted": {"$sum": {"$cond": [{"$lte": [credits, 0]}, 1, 0]}},
+                "low": {"$sum": {"$cond": [{"$and": [{"$gt": [credits, 0]}, {"$lt": [credits, low_limit]}]}, 1, 0]}},
+            }}]))
+            counts = result[0] if result else {"total": 0, "exhausted": 0, "low": 0}
+            metric = GaugeMetricFamily(
+                "librechat_balance_users",
+                "Number of users per balance state (exhausted, low, ok)",
+                labels=["state"],
+            )
+            metric.add_metric(["exhausted"], counts["exhausted"])
+            metric.add_metric(["low"], counts["low"])
+            metric.add_metric(["ok"], counts["total"] - counts["exhausted"] - counts["low"])
+            yield metric
+        except Exception as e:
+            logger.exception("Error collecting balance users: %s", e)
 
 
 if __name__ == "__main__":
