@@ -52,13 +52,20 @@ jobs:
             });
             db.transactions.insertMany([
               { user: ObjectId("000000000000000000000001"), model: "gemini-flash", context: "message",
-                tokenType: "prompt", rawAmount: -100, createdAt: ISODate("3025-01-15T21:31:09.989Z") },
+                tokenType: "prompt", rawAmount: -100, inputTokens: -50, writeTokens: -10, readTokens: -40,
+                tokenValue: -300, createdAt: ISODate("3025-01-15T21:31:09.989Z") },
               { user: ObjectId("000000000000000000000002"), model: "local-llm", context: "message",
                 tokenType: "prompt", rawAmount: -100, createdAt: ISODate("3025-01-15T21:31:09.989Z") },
               { user: ObjectId("000000000000000000000002"), model: "gemini-flash", context: "message",
-                tokenType: "prompt", rawAmount: -100, createdAt: ISODate("3025-01-15T21:31:09.989Z") },
+                tokenType: "prompt", rawAmount: -100, tokenValue: -300, createdAt: ISODate("3025-01-15T21:31:09.989Z") },
               { user: ObjectId("000000000000000000000003"), model: "gemini-flash", context: "title",
-                tokenType: "prompt", rawAmount: -100, createdAt: ISODate("3025-01-15T21:31:09.989Z") }
+                tokenType: "prompt", rawAmount: -100, tokenValue: -300, createdAt: ISODate("3025-01-15T21:31:09.989Z") },
+              { user: ObjectId("000000000000000000000004"), model: "gemini-flash", context: "abort",
+                tokenType: "prompt", rawAmount: -100, tokenValue: -300, createdAt: ISODate("3025-01-15T21:31:09.989Z") },
+              { user: ObjectId("000000000000000000000004"), model: "gemini-flash", context: "subagent",
+                tokenType: "completion", rawAmount: -50, tokenValue: -500, createdAt: ISODate("3025-01-15T21:31:09.989Z") },
+              { user: ObjectId("000000000000000000000005"), context: "autoRefill",
+                tokenType: "credits", rawAmount: 5000000, tokenValue: 5000000, createdAt: ISODate("3025-01-15T21:31:09.989Z") }
             ]);
             db.messages.insertOne({
               isCreatedByUser: false,
@@ -66,6 +73,13 @@ jobs:
               model: "local-llm",
               createdAt: ISODate("3025-01-15T21:31:09.989Z")
             });
+            db.messages.insertMany([
+              { isCreatedByUser: false, endpoint: "custom", model: "local-llm", error: false,
+                content: [{ type: "text", text: "partial" }, { type: "error", error: "upstream failed" }],
+                createdAt: ISODate("3025-01-15T21:31:09.989Z") },
+              { isCreatedByUser: false, endpoint: "google", model: "gemini-flash", error: true,
+                text: "{\"type\":\"token_balance\"}", createdAt: ISODate("3025-01-15T21:31:09.989Z") }
+            ]);
             quit;' | docker exec -i mongo mongosh LibreChat
 
       - name: run exporter
@@ -100,12 +114,40 @@ jobs:
       - name: probe for librechat status in output
         run: grep 'librechat_status_code' metrics
 
+      # Errors are either flagged on the message (rejected requests) or stored as
+      # an error content part (failures during generation, LibreChat v0.8.7+).
+      - name: probe for error metrics
+        run: |
+          grep '^librechat_error_messages_total 2.0' metrics
+          grep '^librechat_errors_per_model_total{model="local-llm"} 1.0' metrics
+          grep '^librechat_errors_per_model_total{model="gemini-flash"} 1.0' metrics
+          grep '^librechat_error_messages_5m 2.0' metrics
+          grep '^librechat_errors_per_model_5m{model="local-llm"} 1.0' metrics
+
       # Label order in the output depends on the prometheus-client version, so
-      # match each label separately. The title transaction must not count.
+      # match each label separately. The title transaction must not count, the
+      # abort and subagent ones must. The failed answer must not count.
       - name: probe for usage window metrics
         run: |
-          grep '^librechat_window_unique_users{window="1d"} 2.0' metrics
+          grep '^librechat_window_unique_users{window="1d"} 3.0' metrics
           grep '^librechat_window_users_by_model_class{' metrics | grep 'window="1d"' | grep 'usage="both"' | grep ' 1.0$'
-          grep '^librechat_window_users_by_model_class{' metrics | grep 'window="1d"' | grep 'usage="external_only"' | grep ' 1.0$'
+          grep '^librechat_window_users_by_model_class{' metrics | grep 'window="1d"' | grep 'usage="external_only"' | grep ' 2.0$'
           grep '^librechat_window_answers_per_model{' metrics | grep 'model="local-llm"' | grep 'class="local"' | grep 'window="1d"' | grep ' 1.0$'
-          grep '^librechat_window_tokens_per_model{' metrics | grep 'model="gemini-flash"' | grep 'type="input"' | grep 'window="1d"' | grep ' 200.0$'
+          grep '^librechat_window_tokens_per_model{' metrics | grep 'model="gemini-flash"' | grep 'type="input"' | grep 'window="1d"' | grep ' 300.0$'
+          grep '^librechat_window_tokens_per_model{' metrics | grep 'model="gemini-flash"' | grep 'type="output"' | grep 'window="1d"' | grep ' 50.0$'
+
+      - name: probe for cache token metrics
+        run: |
+          grep '^librechat_window_cache_tokens_per_model{' metrics | grep 'model="gemini-flash"' | grep 'type="read"' | grep 'window="1d"' | grep ' 40.0$'
+          grep '^librechat_window_cache_tokens_per_model{' metrics | grep 'model="gemini-flash"' | grep 'type="write"' | grep 'window="1d"' | grep ' 10.0$'
+          grep '^librechat_window_cache_tokens_per_model{' metrics | grep 'model="local-llm"' | grep 'type="read"' | grep 'window="1d"' | grep ' 0.0$'
+
+      # Every context is charged, credit refills are not.
+      - name: probe for credit metrics
+        run: |
+          credits() { grep '^librechat_window_credits_per_model{' metrics | grep 'model="gemini-flash"' | grep 'window="1d"' | grep "context=\"$1\"" | grep "type=\"$2\"" | grep " $3$"; }
+          credits message input 600.0
+          credits title input 300.0
+          credits abort input 300.0
+          credits subagent output 500.0
+          if grep -q 'context="autoRefill"' metrics; then echo "credit refills must not count"; exit 1; fi

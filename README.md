@@ -15,12 +15,12 @@ The script connects to the MongoDB database used by LibreChat, aggregates releva
   - **Unique users per day, week, and month**
   - **Message and conversation counts**
   - **Token usage (input/output) per model**
-  - **Error tracking per model**
+  - **Error tracking per model** (requests rejected before generation and failures during generation)
   - **Active users and conversations**
   - **Chat rating metrics** (thumbs up/down, feedback tags, model performance)
   - **Tool usage metrics** (tool calls, success rates, per-model/endpoint breakdown)
   - **Real-time activity monitoring** (5-minute windows)
-  - **Usage per model over rolling windows** (e.g. 1d/7d/30d): unique users, answers and tokens, optionally split into local and external models
+  - **Usage per model over rolling windows** (e.g. 1d/7d/30d): unique users, answers, tokens, prompt-cache tokens and credits charged, optionally split into local and external models
 - **Chat Rating Analytics**:
   - Track user satisfaction with thumbs up/down ratings
   - Analyze model performance and quality feedback
@@ -465,6 +465,16 @@ librechat_window_answers_per_model{class="external",model="gemini-3.8-flash",win
 # TYPE librechat_window_tokens_per_model gauge
 librechat_window_tokens_per_model{class="local",model="Qwen/Qwen3.5-122B-A10B-FP8",type="input",window="7d"} 1.4e+07
 librechat_window_tokens_per_model{class="local",model="Qwen/Qwen3.5-122B-A10B-FP8",type="output",window="7d"} 9.1e+05
+
+# HELP librechat_window_cache_tokens_per_model Number of input tokens of chat requests read from or written to the prompt cache per model in the rolling window
+# TYPE librechat_window_cache_tokens_per_model gauge
+librechat_window_cache_tokens_per_model{class="external",model="claude-haiku-4-5",type="read",window="7d"} 1.1e+07
+librechat_window_cache_tokens_per_model{class="external",model="claude-haiku-4-5",type="write",window="7d"} 5.8e+06
+
+# HELP librechat_window_credits_per_model Credits charged per model, transaction context and token type in the rolling window (1,000,000 credits = 1 USD)
+# TYPE librechat_window_credits_per_model gauge
+librechat_window_credits_per_model{class="external",context="message",model="gemini-3.8-flash",type="input",window="7d"} 3.9e+07
+librechat_window_credits_per_model{class="external",context="title",model="gemini-3.5-flash-lite",type="input",window="7d"} 5.1e+05
 ```
 
 ### Usage window metrics
@@ -473,10 +483,20 @@ The `librechat_window_*` metrics count what happened in each rolling window
 (`USAGE_WINDOWS`) instead of over the whole database, so they don't drop when
 old chats are deleted and a share over time is a plain ratio:
 
-- Users and tokens come from the `transactions` collection, which records the
-  model that actually ran, for agents too. Only chat requests count; title
-  generation, summarization, memory and image generation are left out.
+- Users, tokens and credits come from the `transactions` collection, which
+  records the model that actually ran, for agents too. Users and tokens count
+  chat requests only: the contexts `message`, `incomplete` and, from LibreChat
+  v0.8.8, `abort` (stopped turns) and `subagent`. Title generation,
+  summarization, memory and image generation are left out.
   LibreChat records transactions unless `transactions.enabled` is `false`.
+- `librechat_window_credits_per_model` covers every charged request, with the
+  transaction `context` as a label, so background tasks such as title
+  generation and summarization show up there. Credits are what LibreChat
+  charged against user balances at its configured rates (1,000,000 credits =
+  1 USD), not a provider invoice. Credit refills are not counted.
+- `librechat_window_cache_tokens_per_model` splits the input tokens of chat
+  requests that were read from (`type="read"`) or written to (`type="write"`)
+  the provider's prompt cache. They are part of the input tokens.
 - Answers come from the `messages` collection (assistant messages without
   errors). An agent's answers carry the agent id and are counted under the
   agent's current model.
@@ -499,6 +519,19 @@ Share of answers from local models:
 ```promql
 sum by (instance) (librechat_window_answers_per_model{window="7d", class="local"})
   / on (instance) sum by (instance) (librechat_window_answers_per_model{window="7d"})
+```
+
+Credits charged in the last 30 days, in USD, per model:
+
+```promql
+sum by (instance, model) (librechat_window_credits_per_model{window="30d"}) / 1e6
+```
+
+Share of input tokens served from the prompt cache per model:
+
+```promql
+librechat_window_cache_tokens_per_model{window="7d", type="read"}
+  / ignoring (type) librechat_window_tokens_per_model{window="7d", type="input"}
 ```
 
 ## Development

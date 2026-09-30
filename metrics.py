@@ -28,8 +28,16 @@ logger.debug("Set log level to %s", logging.getLevelName(logger.getEffectiveLeve
 
 # Transaction contexts of user-driven chat requests. Title generation,
 # summarization, memory and image generation run in the background and are
-# left out of the usage window metrics.
-CHAT_CONTEXTS = ["message", "incomplete"]
+# left out of the usage window metrics. A stopped turn is recorded as
+# "incomplete" up to LibreChat v0.8.7 and as "abort" from v0.8.8, which also
+# records subagent calls separately as "subagent".
+CHAT_CONTEXTS = ["message", "incomplete", "abort", "subagent"]
+
+# Messages that failed. A request rejected before generation (e.g. no credits
+# left) is flagged with error: true; from LibreChat v0.8.7 a failure during
+# generation is stored as an error content part instead, with error: false.
+ERROR_MESSAGE = {"$or": [{"error": True}, {"content.type": "error"}]}
+NOT_ERROR_MESSAGE = {"error": {"$ne": True}, "content.type": {"$ne": "error"}}
 
 
 class LibreChatMetricsCollector(Collector):
@@ -349,7 +357,7 @@ class LibreChatMetricsCollector(Collector):
         Collect number of error messages in the database.
         """
         try:
-            total_errors = self.messages_collection.count_documents({"error": True})
+            total_errors = self.messages_collection.count_documents(ERROR_MESSAGE)
             logger.debug("Error message count: %s", total_errors)
             yield CounterMetricFamily(
                 "librechat_error_messages_total",
@@ -454,7 +462,7 @@ class LibreChatMetricsCollector(Collector):
         """
         try:
             pipeline = [
-                {"$match": {"error": True}},
+                {"$match": ERROR_MESSAGE},
                 {"$group": {"_id": "$model", "errorCount": {"$sum": 1}}},
             ]
             results = self.messages_collection.aggregate(pipeline)
@@ -942,7 +950,7 @@ class LibreChatMetricsCollector(Collector):
             five_minutes_ago = now - timedelta(minutes=5)
 
             error_count_5m = self.messages_collection.count_documents(
-                {"error": True, "createdAt": {"$gte": five_minutes_ago}}
+                {**ERROR_MESSAGE, "createdAt": {"$gte": five_minutes_ago}}
             )
             yield GaugeMetricFamily(
                 "librechat_error_messages_5m",
@@ -964,7 +972,7 @@ class LibreChatMetricsCollector(Collector):
             pipeline_5m = [
                 {
                     "$match": {
-                        "error": True,
+                        **ERROR_MESSAGE,
                         "createdAt": {"$gte": five_minutes_ago},
                         "model": {"$exists": True, "$ne": None},
                     }
@@ -1894,22 +1902,22 @@ class LibreChatMetricsCollector(Collector):
 
     def _build_usage_window_metrics(self):
         """
-        Collect users, answers and tokens per model over each rolling window.
+        Collect users, answers, tokens and credits per model over each rolling window.
 
-        Users and tokens come from the transactions collection, which records the
-        model that actually ran, for agents too. Answers come from the messages
-        collection, where an agent's answers carry the agent id; those are mapped
-        to the agent's current model.
+        Users, tokens and credits come from the transactions collection, which
+        records the model that actually ran, for agents too. Answers come from the
+        messages collection, where an agent's answers carry the agent id; those are
+        mapped to the agent's current model.
         """
         # PyMongo returns naive UTC datetimes, so compare against naive UTC.
         now = datetime.now(timezone.utc).replace(tzinfo=None)
         starts = [(label, now - delta) for label, delta in self.usage_windows]
         oldest = starts[-1][1]
 
-        def per_window(value):
+        def per_window(value, prefix="w"):
             """$group accumulators that sum value once for every window a document falls in."""
             return {
-                f"w{i}": {"$sum": {"$cond": [{"$gte": ["$createdAt", start]}, value, 0]}}
+                f"{prefix}{i}": {"$sum": {"$cond": [{"$gte": ["$createdAt", start]}, value, 0]}}
                 for i, (_, start) in enumerate(starts)
             }
 
@@ -1963,7 +1971,7 @@ class LibreChatMetricsCollector(Collector):
         }
         answers = {}  # model -> count per window
         for row in self.messages_collection.aggregate([
-            {"$match": {"createdAt": {"$gte": oldest}, "isCreatedByUser": False, "error": {"$ne": True}}},
+            {"$match": {"createdAt": {"$gte": oldest}, "isCreatedByUser": False, **NOT_ERROR_MESSAGE}},
             {"$group": {"_id": {"endpoint": "$endpoint", "model": "$model"}, **per_window(1)}},
         ]):
             model = row["_id"].get("model") or "unknown"
@@ -1983,23 +1991,67 @@ class LibreChatMetricsCollector(Collector):
                 answers_per_model.add_metric([label, model, self._model_class(model)], counts[i])
         yield answers_per_model
 
+        # One pass over every charged request: tokens and prompt-cache tokens of
+        # chat requests, credits of all of them, background tasks included.
+        # Charges are stored as negative amounts; credit refills are left out.
+        tokens = {}   # (model, type) -> per window
+        cache = {}    # (model, type) -> per window
+        credits = {}  # (model, context, type) -> per window
+
+        def add(sums, key, row, field):
+            values = sums.setdefault(key, [0] * len(starts))
+            for i in range(len(starts)):
+                values[i] += row[f"{field}{i}"]
+
+        for row in transactions.aggregate([
+            {"$match": {"createdAt": {"$gte": oldest}, "tokenType": {"$in": ["prompt", "completion"]}}},
+            {"$group": {
+                "_id": {"model": "$model", "tokenType": "$tokenType", "context": "$context"},
+                **per_window({"$abs": "$rawAmount"}, "tokens"),
+                **per_window({"$abs": {"$ifNull": ["$readTokens", 0]}}, "read"),
+                **per_window({"$abs": {"$ifNull": ["$writeTokens", 0]}}, "write"),
+                **per_window({"$abs": {"$ifNull": ["$tokenValue", 0]}}, "credits"),
+            }},
+        ]):
+            model = row["_id"].get("model") or "unknown"
+            context = row["_id"].get("context") or "unknown"
+            is_prompt = row["_id"]["tokenType"] == "prompt"
+            token_type = "input" if is_prompt else "output"
+            add(credits, (model, context, token_type), row, "credits")
+            if context in CHAT_CONTEXTS:
+                add(tokens, (model, token_type), row, "tokens")
+                if is_prompt:
+                    add(cache, (model, "read"), row, "read")
+                    add(cache, (model, "write"), row, "write")
+
         tokens_per_model = GaugeMetricFamily(
             "librechat_window_tokens_per_model",
             "Number of tokens of chat requests per model in the rolling window",
             labels=["window", "model", "class", "type"],
         )
-        for row in transactions.aggregate([
-            {"$match": {**chat_requests, "tokenType": {"$in": ["prompt", "completion"]}}},
-            {"$group": {
-                "_id": {"model": "$model", "tokenType": "$tokenType"},
-                **per_window({"$abs": "$rawAmount"}),
-            }},
-        ]):
-            model = row["_id"].get("model") or "unknown"
-            token_type = "input" if row["_id"]["tokenType"] == "prompt" else "output"
-            for i, (label, _) in enumerate(starts):
-                tokens_per_model.add_metric([label, model, self._model_class(model), token_type], row[f"w{i}"])
+        cache_tokens_per_model = GaugeMetricFamily(
+            "librechat_window_cache_tokens_per_model",
+            "Number of input tokens of chat requests read from or written to the prompt cache "
+            "per model in the rolling window",
+            labels=["window", "model", "class", "type"],
+        )
+        for metric, sums in ((tokens_per_model, tokens), (cache_tokens_per_model, cache)):
+            for (model, token_type), values in sums.items():
+                for i, (label, _) in enumerate(starts):
+                    metric.add_metric([label, model, self._model_class(model), token_type], values[i])
         yield tokens_per_model
+        yield cache_tokens_per_model
+
+        credits_per_model = GaugeMetricFamily(
+            "librechat_window_credits_per_model",
+            "Credits charged per model, transaction context and token type in the rolling window "
+            "(1,000,000 credits = 1 USD)",
+            labels=["window", "model", "class", "context", "type"],
+        )
+        for (model, context, token_type), values in credits.items():
+            for i, (label, _) in enumerate(starts):
+                credits_per_model.add_metric([label, model, self._model_class(model), context, token_type], values[i])
+        yield credits_per_model
 
 
 if __name__ == "__main__":
