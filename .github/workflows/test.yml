@@ -93,7 +93,9 @@ jobs:
                   { type: "tool_call", tool_call: { name: "web_search", output: "Found 3 results about error handling" } },
                   { type: "tool_call", tool_call: { name: "web_search",
                     output: "Error: Received tool input did not match expected schema\n Please fix your mistakes." } },
-                  { type: "tool_call", tool_call: { name: "web_search", output: "Error: [timeout] tool call failed: no response" } }
+                  { type: "tool_call", tool_call: { name: "web_search", output: "Error: [timeout] tool call failed: no response" } },
+                  { type: "tool_call", tool_call: { name: "bash_tool",
+                    output: "Error: Interrupted by a user message. Cancellation was requested; external effects may already have occurred. Do not repeat this operation automatically.\n Please fix your mistakes." } }
                 ],
                 createdAt: ISODate("3025-01-15T21:31:09.989Z") }
             ]);
@@ -234,12 +236,17 @@ jobs:
           grep '^librechat_balance_users{state="ok"} 2.0' metrics
 
       # Failed tool calls, in the forms LibreChat and MCP servers report them. An
-      # output that merely mentions an error is not a failure.
+      # output that merely mentions an error is not a failure, and neither is a
+      # call the user interrupted by sending a message.
       - name: probe for tool error metrics
         run: |
           grep '^librechat_tool_call_errors_total 4.0' metrics
           grep '^librechat_tool_call_errors_per_tool_total{tool_name="web_search"} 2.0' metrics
           grep '^librechat_tool_call_errors_per_tool_total{tool_name="fetch_mcp_mcp-uos"} 1.0' metrics
+          grep '^librechat_tool_success_rate_per_tool{tool_name="bash_tool"} 100.0' metrics
+          if grep -q 'librechat_tool_call_errors_per_tool_total{tool_name="bash_tool"}' metrics; then
+            echo "a call interrupted by a user message is not a failure"; exit 1
+          fi
 
       # MCP tools are named <tool>_mcp_<server>.
       - name: probe for MCP metrics

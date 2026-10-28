@@ -1535,20 +1535,25 @@ class LibreChatMetricsCollector(Collector):
                 r"|^error:\s*(\[[^\]]*\]\s*)*tool call failed:"
                 r"|^error:[\s\S]*please fix your mistakes\.?\s*$"
             )
+            # A call cancelled because the user sent a message while it ran
+            # (LibreChat v0.8.9 steering) is reported as "Error: Interrupted by a
+            # user message. ... Please fix your mistakes." The tool did not fail,
+            # so it is not counted.
+            interrupted_regex = r"^error:\s*interrupted by a user message"
 
             def error_match(field):
+                text = {
+                    "$cond": [
+                        {"$eq": [{"$type": field}, "string"]},
+                        field,
+                        ""
+                    ]
+                }
                 return {
-                    "$regexMatch": {
-                        "input": {
-                            "$cond": [
-                                {"$eq": [{"$type": field}, "string"]},
-                                field,
-                                ""
-                            ]
-                        },
-                        "regex": error_regex,
-                        "options": "i"
-                    }
+                    "$and": [
+                        {"$regexMatch": {"input": text, "regex": error_regex, "options": "i"}},
+                        {"$not": [{"$regexMatch": {"input": text, "regex": interrupted_regex, "options": "i"}}]}
+                    ]
                 }
 
             errors_pipeline = [
