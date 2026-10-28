@@ -663,7 +663,9 @@ A tool call counts as failed when its output is an error in one of the forms
 LibreChat and MCP servers report: `Error processing tool ...`,
 `Error: ... tool call failed: ...`, `Error: ... Please fix your mistakes.` or
 `Error calling tool ...`. An output that only mentions an error, such as a
-search result about error handling, does not count.
+search result about error handling, does not count. Neither does a call that
+was cancelled because the user sent a new message while it ran
+(`Error: Interrupted by a user message. ...`, LibreChat v0.8.9 and later).
 
 `librechat_mcp_tool_calls_per_server` and
 `librechat_mcp_tool_call_errors_per_server` group the calls of MCP tools, which
