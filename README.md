@@ -40,7 +40,7 @@ The script connects to the MongoDB database used by LibreChat, aggregates releva
 
 ## Prerequisites
 
-- **Python 3.6** or higher
+- **Python 3.11** or higher
 - Access to the **LibreChat MongoDB** database
 - **Prometheus** installed and configured to scrape the metrics endpoint
 
@@ -730,7 +730,7 @@ In addition to real-time metrics monitoring, this tool supports historical analy
 
 - **MariaDB** or MySQL server (supplied via docker in this repo)
 - **Grafana** for visualization (supplied via docker in this repo)
-- **Python 3.6+** with pymongo and mysql-connector-python (supplied via requirements.txt)
+- **Python 3.11+** with pymongo and mysql-connector-python (supplied via requirements.txt)
 
 ### Setup for Historical Analysis
 
