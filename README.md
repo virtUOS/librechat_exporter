@@ -38,6 +38,22 @@ The script connects to the MongoDB database used by LibreChat, aggregates releva
 - Designed to run continuously, collecting metrics at regular intervals
 - Full backward compatibility with older LibreChat versions
 
+## Dashboard
+
+The repository includes a Grafana dashboard for these metrics. [Grafana Dashboard (Prometheus)](#grafana-dashboard-prometheus) explains how to import it. The screenshots show it with made-up demo data.
+
+Users, messages and tokens, overall and per model:
+
+![Grafana dashboard: users, messages and tokens per model](docs/screenshots/dashboard-activity.png)
+
+Ratings and the feedback tags users chose:
+
+![Grafana dashboard: ratings per model and feedback tags](docs/screenshots/dashboard-ratings.png)
+
+Tool calls, success rates per tool and tool calls that returned nothing, such as web searches that found no results:
+
+![Grafana dashboard: tool calls, success rates and empty outputs](docs/screenshots/dashboard-tools.png)
+
 ## Prerequisites
 
 - **Python 3.11** or higher
@@ -739,7 +755,7 @@ curl -sf http://localhost:8000
 
 ### Grafana Dashboard (Prometheus)
 
-A starter Grafana dashboard for the real-time Prometheus metrics is provided at [prometheus-dev/Grafana-Dashboard-template.json](prometheus-dev/Grafana-Dashboard-template.json). It covers the main features: users (active / daily / weekly / monthly unique), messages and tokens (totals and 5m rates, per model), ratings (thumbs up/down, per-model rating ratio) and tool usage (calls, errors, success rate per tool).
+A starter Grafana dashboard for the real-time Prometheus metrics is provided at [prometheus-dev/Grafana-Dashboard-template.json](prometheus-dev/Grafana-Dashboard-template.json). It covers the main features: users (active / daily / weekly / monthly unique), messages and tokens (totals and 5m rates, per model), ratings (thumbs up/down, per-model rating ratio) and tool usage (calls, errors, success rate per tool, empty outputs). The [Dashboard](#dashboard) section shows screenshots.
 
 To import it, open Grafana → **Dashboards** → **New** → **Import**, upload the JSON, and select your Prometheus datasource when prompted.
 
