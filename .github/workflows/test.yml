@@ -99,6 +99,16 @@ jobs:
                 ],
                 createdAt: ISODate("3025-01-15T21:31:09.989Z") }
             ]);
+            db.messages.insertOne({
+              isCreatedByUser: false, endpoint: "agents", model: "local-llm",
+              content: [
+                { type: "tool_call", tool_call: { name: "web_search", output: "" } },
+                { type: "tool_call", tool_call: { name: "web_search", output: "=== Web Results, Turn 0 ===" } },
+                { type: "tool_call", tool_call: { id: "srvtoolu_01", name: "web_search" } },
+                { type: "tool_call", tool_call: { name: "bash_tool", output: "ok" } }
+              ],
+              updatedAt: ISODate("3025-01-15T21:31:09.989Z")
+            });
             db.sessions.insertMany([
               { user: ObjectId("000000000000000000000001"), expiration: ISODate("3025-01-15T21:31:09.989Z") },
               { user: ObjectId("000000000000000000000001"), expiration: ISODate("3025-01-15T21:31:09.989Z") },
@@ -247,6 +257,15 @@ jobs:
           if grep -q 'librechat_tool_call_errors_per_tool_total{tool_name="bash_tool"}' metrics; then
             echo "a call interrupted by a user message is not a failure"; exit 1
           fi
+
+      # LibreChat's web search stores an empty output when the search returned no
+      # results. A call with no output at all, such as a provider's own web search,
+      # does not count as empty. Every tool used in the window gets a value.
+      - name: probe for empty tool output metrics
+        run: |
+          grep '^librechat_tool_call_empty_outputs_per_tool_5m{tool_name="web_search"} 1.0' metrics
+          grep '^librechat_tool_call_empty_outputs_per_tool_5m{tool_name="bash_tool"} 0.0' metrics
+          grep '^librechat_tool_calls_per_tool_5m{tool_name="web_search"} 3.0' metrics
 
       # MCP tools are named <tool>_mcp_<server>.
       - name: probe for MCP metrics

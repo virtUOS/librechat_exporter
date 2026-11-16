@@ -18,7 +18,7 @@ The script connects to the MongoDB database used by LibreChat, aggregates releva
   - **Error tracking per model** (requests rejected before generation and failures during generation)
   - **Active users and conversations**
   - **Chat rating metrics** (thumbs up/down, feedback tags, model performance)
-  - **Tool usage metrics** (tool calls, success rates, per-model/endpoint breakdown, calls and failures per MCP server)
+  - **Tool usage metrics** (tool calls, success rates, per-model/endpoint breakdown, calls and failures per MCP server, empty outputs such as web searches that found nothing)
   - **Real-time activity monitoring** (5-minute windows)
   - **Usage per model over rolling windows** (e.g. 1d/7d/30d): unique users, answers, stopped answers, tokens of chat and background requests, prompt-cache tokens and credits charged, optionally split into local and external models
   - **Balance metrics**: users who ran out of credits or are close to it, and requests rejected before generation by reason
@@ -450,6 +450,11 @@ librechat_tool_calls_per_tool_5m{tool_name="file_search"} 2.0
 # TYPE librechat_tool_call_errors_5m gauge
 librechat_tool_call_errors_5m 0.0
 
+# HELP librechat_tool_call_empty_outputs_per_tool_5m Number of tool calls per tool with an empty output in the last 5 minutes
+# TYPE librechat_tool_call_empty_outputs_per_tool_5m gauge
+librechat_tool_call_empty_outputs_per_tool_5m{tool_name="web_search"} 1.0
+librechat_tool_call_empty_outputs_per_tool_5m{tool_name="file_search"} 0.0
+
 # HELP librechat_messages_with_tools_total Total number of messages containing tool calls
 # TYPE librechat_messages_with_tools_total gauge
 librechat_messages_with_tools_total 92.0
@@ -666,6 +671,22 @@ LibreChat and MCP servers report: `Error processing tool ...`,
 search result about error handling, does not count. Neither does a call that
 was cancelled because the user sent a new message while it ran
 (`Error: Interrupted by a user message. ...`, LibreChat v0.8.9 and later).
+
+### Empty tool outputs
+
+`librechat_tool_call_empty_outputs_per_tool_5m` counts the tool calls of the
+last 5 minutes whose output is an empty string. LibreChat's web search stores
+an empty output when the search returned no results, which is not an error to
+the tool error metrics. Many empty searches in a row usually mean the search
+backend fails, for example when the engines behind a SearXNG instance block
+it. A call with no output at all, such as a provider's own web search, does
+not count. Every tool used in the last 5 minutes gets a value, 0 if none of its
+outputs was empty, so the share of empty web searches over the last hour is
+
+```promql
+sum_over_time(librechat_tool_call_empty_outputs_per_tool_5m{tool_name="web_search"}[1h])
+  / sum_over_time(librechat_tool_calls_per_tool_5m{tool_name="web_search"}[1h])
+```
 
 `librechat_mcp_tool_calls_per_server` and
 `librechat_mcp_tool_call_errors_per_server` group the calls of MCP tools, which
