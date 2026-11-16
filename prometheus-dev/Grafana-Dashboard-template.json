@@ -561,7 +561,7 @@
         "defaults": { "color": { "mode": "palette-classic" }, "unit": "short" }
       },
       "targets": [
-        { "expr": "librechat_tool_calls_per_tool", "legendFormat": "{{tool}}", "refId": "A", "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" } }
+        { "expr": "librechat_tool_calls_per_tool", "legendFormat": "{{tool_name}}", "refId": "A", "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" } }
       ]
     },
     {
@@ -574,13 +574,53 @@
       "fieldConfig": {
         "defaults": {
           "min": 0,
-          "max": 1,
-          "unit": "percentunit",
-          "thresholds": { "mode": "absolute", "steps": [{ "color": "red" }, { "color": "yellow", "value": 0.8 }, { "color": "green", "value": 0.95 }] }
+          "max": 100,
+          "unit": "percent",
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "red" }, { "color": "yellow", "value": 80 }, { "color": "green", "value": 95 }] }
         }
       },
       "targets": [
-        { "expr": "librechat_tool_success_rate_per_tool", "legendFormat": "{{tool}}", "refId": "A", "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" } }
+        { "expr": "librechat_tool_success_rate_per_tool", "legendFormat": "{{tool_name}}", "refId": "A", "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" } }
+      ]
+    },
+    {
+      "type": "bargauge",
+      "title": "Empty Outputs per Tool (last 5m)",
+      "description": "Tool calls of the last 5 minutes whose output was empty. LibreChat's web search stores an empty output when the search returned no results, for example while the engines behind SearXNG block the server.",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 60 },
+      "id": 29,
+      "options": { "orientation": "horizontal", "displayMode": "gradient", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "showUnfilled": true },
+      "fieldConfig": {
+        "defaults": {
+          "min": 0,
+          "unit": "short",
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green" }, { "color": "orange", "value": 1 }] }
+        }
+      },
+      "targets": [
+        { "expr": "librechat_tool_call_empty_outputs_per_tool_5m", "legendFormat": "{{tool_name}}", "refId": "A", "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" } }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Empty Web Searches (share of the last hour)",
+      "description": "For every point, the share of web searches in the hour before it that returned no results. Many empty searches in a row usually mean the search backend fails.",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 60 },
+      "id": 30,
+      "options": { "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "single" } },
+      "fieldConfig": {
+        "defaults": {
+          "min": 0,
+          "max": 1,
+          "unit": "percentunit",
+          "custom": { "lineWidth": 2, "fillOpacity": 10, "showPoints": "never" },
+          "color": { "mode": "fixed", "fixedColor": "orange" }
+        }
+      },
+      "targets": [
+        { "expr": "sum(sum_over_time(librechat_tool_call_empty_outputs_per_tool_5m{tool_name=\"web_search\"}[1h])) / sum(sum_over_time(librechat_tool_calls_per_tool_5m{tool_name=\"web_search\"}[1h]))", "legendFormat": "empty web searches", "refId": "A", "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" } }
       ]
     }
   ],
