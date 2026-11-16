@@ -342,6 +342,7 @@ class LibreChatMetricsCollector(Collector):
                 yield from self.collect_tool_calls_5m()
                 yield from self.collect_tool_calls_per_tool_5m()
                 yield from self.collect_tool_call_errors_5m()
+                yield from self.collect_tool_call_empty_outputs_per_tool_5m()
             if self.enable_user_metrics:
                 yield from self.collect_active_tool_users()
 
@@ -1460,6 +1461,7 @@ class LibreChatMetricsCollector(Collector):
                 'calls_5m': 0,
                 'per_tool_5m': {},
                 'errors_5m': 0,
+                'empty_outputs_per_tool_5m': {},
                 'messages_with_tools': 0,
                 'active_tool_users': 0
             }
@@ -1589,9 +1591,13 @@ class LibreChatMetricsCollector(Collector):
                 cache["errors_per_tool"][tool] = err_cnt
                 cache["total_errors"] += err_cnt
 
-            # ── Query C (5-minute): total calls + per-tool + errors
+            # ── Query C (5-minute): total calls + per-tool + errors + empty outputs
             # Time filter comes first so DocumentDB uses the updatedAt index
             # before touching the content array at all.
+            # An empty output is the empty string, which LibreChat's web search
+            # stores when the search returned no results. A call without an
+            # output (a provider's own web search, an unfinished call) is not
+            # empty: $eq does not match a missing field or null to "".
             has_tool_call_5m = {"updatedAt": {"$gte": five_minutes_ago}, **has_tool_call}
             five_min_pipeline = [
                 {"$match": has_tool_call_5m},
@@ -1620,6 +1626,9 @@ class LibreChatMetricsCollector(Collector):
                                     0
                                 ]
                             }
+                        },
+                        "empty_count": {
+                            "$sum": {"$cond": [{"$eq": ["$_tc.tool_call.output", ""]}, 1, 0]}
                         }
                     }
                 }
@@ -1629,6 +1638,7 @@ class LibreChatMetricsCollector(Collector):
                 cache["calls_5m"] += item["count"]
                 cache["per_tool_5m"][tool] = item["count"]
                 cache["errors_5m"] += item.get("error_count", 0)
+                cache["empty_outputs_per_tool_5m"][tool] = item.get("empty_count", 0)
 
             # ── Query D: messages with tool calls + active tool users (5m)
             # count_documents uses the multikey index — no aggregation needed.
@@ -1659,6 +1669,7 @@ class LibreChatMetricsCollector(Collector):
                 'calls_5m': 0,
                 'per_tool_5m': {},
                 'errors_5m': 0,
+                'empty_outputs_per_tool_5m': {},
                 'messages_with_tools': 0,
                 'active_tool_users': 0
             }
@@ -1936,6 +1947,32 @@ class LibreChatMetricsCollector(Collector):
             )
         except Exception as e:
             logger.exception("Error collecting tool call errors in last 5 minutes: %s", e)
+
+    def collect_tool_call_empty_outputs_per_tool_5m(self):
+        """
+        Collect number of tool calls per tool in the last 5 minutes whose output
+        is empty, such as a web search that returned no results.
+        Uses cached data from _fetch_all_tool_metrics
+        """
+        try:
+            if self._tool_cache is None:
+                self._fetch_all_tool_metrics()
+
+            data = self._tool_cache['empty_outputs_per_tool_5m']
+
+            metric = GaugeMetricFamily(
+                "librechat_tool_call_empty_outputs_per_tool_5m",
+                "Number of tool calls per tool with an empty output in the last 5 minutes",
+                labels=["tool_name"],
+            )
+
+            for tool, count in data.items():
+                metric.add_metric([tool], count)
+                logger.debug("Empty tool outputs in last 5 minutes for %s: %s", tool, count)
+
+            yield metric
+        except Exception as e:
+            logger.exception("Error collecting empty tool outputs in last 5 minutes: %s", e)
 
     def collect_messages_with_tools(self):
         """
